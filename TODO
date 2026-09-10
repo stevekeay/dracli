@@ -10,7 +10,7 @@
 
     if bios or drac is not specified, `dracli settings 10.46.96.160` should report both bios and drac settings.
 
-3. change "LARGE WARNING" to "WARNING"
+3. [x] change "LARGE WARNING" to "WARNING"
 
 4. query is simply too slow.  Let's either make it incremental (so the system is displayed first and futher details as they arrive) or make separate command for query versus inventory.  Let's also add the "status" output to the query command.
 

@@ -573,7 +573,7 @@ func writeInventory(output io.Writer, inventory redfish.Inventory, format string
 			drift = -drift
 		}
 		if inventory.Clock.Significant {
-			lines = append(lines, fmt.Sprintf("*** LARGE WARNING: DRAC CLOCK DIFFERS FROM LOCAL SYSTEM TIME BY %d SECONDS ***", drift))
+			lines = append(lines, fmt.Sprintf("*** WARNING: DRAC CLOCK DIFFERS FROM LOCAL SYSTEM TIME BY %d SECONDS ***", drift))
 		} else {
 			lines = append(lines, fmt.Sprintf("DRAC clock agrees with local system time within %d seconds", drift))
 		}

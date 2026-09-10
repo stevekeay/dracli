@@ -72,7 +72,7 @@ firmware, BIOS, memory, CPU, RAID controllers, and NIC FQDDs. NIC output include
 make, model, slot, MAC addresses, link and speed when supplied by Redfish, plus
 Dell Connection View LLDP switch and port data when enabled by the iDRAC.
 It also compares the iDRAC `DateTime` with local system time, accounting for
-RFC 3339 timezone offsets, and prints a large warning when drift exceeds 60
+RFC 3339 timezone offsets, and prints a warning when drift exceeds 60
 seconds. If one Redfish section cannot be decoded, that section is marked
 `UNABLE TO PARSE REDFISH RESPONSE` while successfully decoded sections remain
 visible.

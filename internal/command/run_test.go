@@ -157,7 +157,7 @@ func TestWriteInventoryReportsPartialFailureAndClockWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "System: Dell PowerEdge") ||
-		!strings.Contains(output.String(), "LARGE WARNING") ||
+		!strings.Contains(output.String(), "*** WARNING:") ||
 		!strings.Contains(output.String(), "RAID controllers:\n  UNABLE TO PARSE REDFISH RESPONSE") {
 		t.Fatalf("output = %q", output.String())
 	}
