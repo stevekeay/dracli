@@ -107,6 +107,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		fmt.Fprintf(stderr, "dracli: %v\n\n%s", err, usage)
 		return 2
 	}
+	if net.ParseIP(args[0]) != nil {
+		args = append([]string{"query"}, args...)
+	}
 
 	switch args[0] {
 	case "help", "-help", "--help", "-h":

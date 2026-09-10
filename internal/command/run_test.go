@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -98,6 +99,24 @@ func TestInsecureMayPrecedeCommand(t *testing.T) {
 	exitCode := Run([]string{"--insecure", "status", "10.46.96.160"}, io.Discard, &stderr, func(string) string { return "" })
 	if exitCode != 1 || !strings.Contains(stderr.String(), "BMC_MASTER must be set") {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+}
+
+func TestIPv4AddressWithoutCommandDefaultsToQuery(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	exitCode := Run([]string{"10.46.96.160"}, io.Discard, &stderr, func(string) string { return "" })
+	if exitCode != 1 || !strings.Contains(stderr.String(), "BMC_MASTER must be set") {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	args, err := normalizeGlobalArgs([]string{"--verify-tls", "10.46.96.160"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if net.ParseIP(args[0]) == nil {
+		t.Fatalf("normalized commandless arguments = %#v", args)
 	}
 }
 

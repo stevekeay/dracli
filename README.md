@@ -60,6 +60,7 @@ the process list; `DRAC_PASSWORD` is preferable for ad-hoc use.
 ```sh
 ./dracli query 10.46.96.160
 ./dracli query --output json 10.46.96.160
+./dracli 10.46.96.160 # query is the default command
 
 ./dracli status 10.46.96.160
 ./dracli status --monitor 10.46.96.160
