@@ -88,6 +88,19 @@ visible.
 every five seconds by default and prints only changes. JSON monitor output is
 newline-delimited JSON, one observation per changed state.
 
+## Job queue
+
+```sh
+./dracli jobs x.x.x.x
+./dracli jobs --output json x.x.x.x
+./dracli clear-jobs x.x.x.x
+```
+
+`jobs` displays current job IDs, state, progress, type, message, and available
+timestamps. `clear-jobs` deletes the complete queue using Dell's
+`DellJobService.DeleteJobQueue` action with `JID_CLEARALL`; it does not restart
+Lifecycle Controller services. Clearing the queue cannot be undone.
+
 ## Settings
 
 ```sh

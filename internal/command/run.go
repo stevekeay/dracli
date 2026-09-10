@@ -55,6 +55,14 @@ Commands:
       --monitor to poll every five seconds and print only state changes; use
       --interval to select a different polling period.
 
+  jobs
+      Show the current iDRAC job queue, including state, progress, type,
+      message, and timestamps.
+
+  clear-jobs
+      Delete every entry in the iDRAC job queue. This operation cannot be
+      undone and does not restart Lifecycle Controller services.
+
   settings [drac|bios]
       Show curated settings for both iDRAC and BIOS, or select one namespace.
       Add --all for every available attribute or repeat --name to select
@@ -138,6 +146,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return 0
 	case "status":
 		if err := runStatus(args[1:], stdout, stderr, getenv); err != nil {
+			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			return 1
+		}
+		return 0
+	case "jobs":
+		if err := runJobs(args[1:], stdout, stderr, getenv, false); err != nil {
+			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			return 1
+		}
+		return 0
+	case "clear-jobs":
+		if err := runJobs(args[1:], stdout, stderr, getenv, true); err != nil {
 			fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
@@ -407,6 +427,59 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 			}
 		}
 	}
+}
+
+func runJobs(args []string, stdout, stderr io.Writer, getenv func(string) string, clear bool) error {
+	commandName := "jobs"
+	if clear {
+		commandName = "clear-jobs"
+	}
+	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintf(stderr, "Usage: dracli %s [options] <BMC IPv4 address>\n\n", commandName)
+		flags.PrintDefaults()
+	}
+	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
+	username := flags.String("username", envOrDefault(getenv, "DRAC_USERNAME", "root"), "BMC username")
+	insecure := flags.Bool("insecure", false, "explicitly skip TLS certificate verification (the default)")
+	verifyTLS := flags.Bool("verify-tls", false, "validate the BMC TLS certificate and hostname")
+	output := flags.String("output", "text", "output format: text or json")
+	manager := flags.String("manager", "iDRAC.Embedded.1", "Redfish manager identifier")
+	timeout := flags.Duration("timeout", 30*time.Second, "HTTP request timeout")
+
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 1 {
+		flags.Usage()
+		return errors.New("exactly one BMC IPv4 address is required")
+	}
+	if *output != "text" && *output != "json" {
+		return fmt.Errorf("invalid output format %q: use text or json", *output)
+	}
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	if err != nil {
+		return err
+	}
+	if clear {
+		if err := client.ClearJobs(context.Background(), *manager); err != nil {
+			return err
+		}
+		if *output == "json" {
+			return json.NewEncoder(stdout).Encode(map[string]bool{"cleared": true})
+		}
+		_, err := fmt.Fprintln(stdout, "Job queue cleared.")
+		return err
+	}
+	jobs, err := client.Jobs(context.Background(), *manager)
+	if err != nil {
+		return err
+	}
+	return writeJobs(stdout, jobs, *output)
 }
 
 func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
@@ -733,6 +806,43 @@ func writeSettings(output io.Writer, settings redfish.SettingsSelection, format 
 			value = "not reported"
 		}
 		if _, err := fmt.Fprintf(output, "%s: %v\n", key, value); err != nil {
+			return fmt.Errorf("write text output: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeJobs(output io.Writer, jobs []redfish.Job, format string) error {
+	if format == "json" {
+		encoder := json.NewEncoder(output)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(jobs); err != nil {
+			return fmt.Errorf("write JSON output: %w", err)
+		}
+		return nil
+	}
+	if len(jobs) == 0 {
+		_, err := fmt.Fprintln(output, "No jobs in queue.")
+		return err
+	}
+	for _, job := range jobs {
+		parts := []string{"state=" + known(job.State), fmt.Sprintf("progress=%d%%", job.PercentComplete)}
+		if job.Type != "" {
+			parts = append(parts, "type="+job.Type)
+		}
+		if job.Name != "" {
+			parts = append(parts, "name="+job.Name)
+		}
+		if job.StartTime != "" {
+			parts = append(parts, "start="+job.StartTime)
+		}
+		if job.CompletionTime != "" {
+			parts = append(parts, "completed="+job.CompletionTime)
+		}
+		if job.Message != "" {
+			parts = append(parts, "message="+job.Message)
+		}
+		if _, err := fmt.Fprintf(output, "%s %s\n", known(job.ID), strings.Join(parts, " ")); err != nil {
 			return fmt.Errorf("write text output: %w", err)
 		}
 	}

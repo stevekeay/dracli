@@ -180,6 +180,14 @@ func (c *Client) get(ctx context.Context, endpoint *url.URL, target any) error {
 }
 
 func (c *Client) patchPath(ctx context.Context, path string, value any) error {
+	return c.sendPath(ctx, http.MethodPatch, path, value)
+}
+
+func (c *Client) postPath(ctx context.Context, path string, value any) error {
+	return c.sendPath(ctx, http.MethodPost, path, value)
+}
+
+func (c *Client) sendPath(ctx context.Context, method, path string, value any) error {
 	reference, err := url.Parse(path)
 	if err != nil {
 		return fmt.Errorf("parse Redfish path: %w", err)
@@ -192,7 +200,7 @@ func (c *Client) patchPath(ctx context.Context, path string, value any) error {
 	if err != nil {
 		return fmt.Errorf("encode Redfish request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint.String(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create Redfish request: %w", err)
 	}

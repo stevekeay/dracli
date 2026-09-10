@@ -256,6 +256,30 @@ func TestWriteSettingsPreservesCuratedOrderAndReportsHostname(t *testing.T) {
 	}
 }
 
+func TestWriteJobs(t *testing.T) {
+	t.Parallel()
+
+	jobs := []redfish.Job{{
+		ID: "JID_1", State: "Scheduled", Type: "Configuration",
+		PercentComplete: 20, Message: "Task successfully scheduled.",
+	}}
+	var output bytes.Buffer
+	if err := writeJobs(&output, jobs, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "JID_1 state=Scheduled progress=20% type=Configuration") ||
+		!strings.Contains(output.String(), "message=Task successfully scheduled.") {
+		t.Fatalf("output = %q", output.String())
+	}
+	output.Reset()
+	if err := writeJobs(&output, nil, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "No jobs in queue.\n" {
+		t.Fatalf("empty output = %q", output.String())
+	}
+}
+
 func TestParseSettingsAssignments(t *testing.T) {
 	t.Parallel()
 

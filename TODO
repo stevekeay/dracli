@@ -29,7 +29,7 @@
 
 8. [x] replace the example IP address with x.x.x.x
 
-9. Add a command to view the "job queue".  Add another command to clear it.
+9. [x] Add a command to view the "job queue".  Add another command to clear it.
 
 10.  add a factory reset command (that does the reset operation where the IP address and username/password are  retained, but all other settings revert to factory defaults.)
 
