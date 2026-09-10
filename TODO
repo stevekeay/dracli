@@ -16,7 +16,7 @@
 
 5. [x] Let's add the dell service tag to the query output: "Serial Number: ABC1234D"
 
-6. let's see if we can find the idrac hardware version like idrac9 or whatever, including this in the query output.
+6. [x] let's see if we can find the idrac hardware version like idrac9 or whatever, including this in the query output.
 
 7. The query output is confusing because mem and cpu are system attributes, not idrac attriutes.  So change the order as follows:
 
@@ -35,4 +35,4 @@
 
 11. add a github workflow to lint and build binaries for linux amd64 and MAC.
 
-12.   detect if the output is to a terminal and if so, print some kind of spinner output showing what is happening while the user is waiting for output.  This can be overwritten by the actual output once it arrives.:w
+12.   detect if the output is to a terminal and if so, print some kind of spinner output showing what is happening while the user is waiting for output.  This can be overwritten by the actual output once it arrives.

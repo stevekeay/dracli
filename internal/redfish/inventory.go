@@ -44,8 +44,8 @@ type SystemSummary struct {
 }
 
 type FirmwareSummary struct {
-	Model   string `json:"model,omitempty"`
-	Version string `json:"version,omitempty"`
+	Model   string `json:"hardware_version,omitempty"`
+	Version string `json:"firmware_version,omitempty"`
 }
 
 type MemorySummary struct {

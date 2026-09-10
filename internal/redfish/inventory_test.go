@@ -95,6 +95,9 @@ func TestQueryUsesOnlySummaryResourcesAndIncludesSystemStatus(t *testing.T) {
 	if result.SerialNumber != "ABC1234D" {
 		t.Fatalf("serial number = %q", result.SerialNumber)
 	}
+	if result.IDRAC.Model != "iDRAC9" || result.IDRAC.Version != "7.20" {
+		t.Fatalf("iDRAC summary = %#v", result.IDRAC)
+	}
 	if result.Status.PowerState != "On" || result.Status.BootProgress.LastState != "OSRunning" {
 		t.Fatalf("status = %#v", result.Status)
 	}

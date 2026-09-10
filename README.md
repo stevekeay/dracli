@@ -75,6 +75,10 @@ model, slot, MAC addresses,
 link and speed when supplied by Redfish, plus Dell Connection View LLDP switch
 and port data when enabled by the iDRAC.
 
+The iDRAC hardware version (for example, `iDRAC9` or `16G Monolithic`) comes
+from the Manager resource's standard Redfish `Model` property; its software
+version comes from `FirmwareVersion`.
+
 The clock comparison accounts for RFC 3339 timezone offsets and prints a warning
 when drift exceeds 60 seconds. If one Redfish section cannot be decoded, it is marked
 `UNABLE TO PARSE REDFISH RESPONSE` while successfully decoded sections remain

@@ -169,6 +169,7 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 	inventory := redfish.Inventory{
 		System:       redfish.SystemSummary{Manufacturer: "Dell", Model: "PowerEdge"},
 		SerialNumber: "ABC1234D",
+		IDRAC:        redfish.FirmwareSummary{Model: "iDRAC9", Version: "7.20"},
 		Status: redfish.SystemStatus{
 			PowerState: "On",
 			BootProgress: redfish.BootProgress{
@@ -182,12 +183,21 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "Serial Number: ABC1234D") ||
+		!strings.Contains(output.String(), "iDRAC: iDRAC9 7.20") ||
 		!strings.Contains(output.String(), "Power state: On") ||
 		!strings.Contains(output.String(), "Boot progress: OSRunning at 2026-09-10T07:00:00Z") {
 		t.Fatalf("output = %q", output.String())
 	}
 	if strings.Contains(output.String(), "RAID controllers:") || strings.Contains(output.String(), "NICs:") {
 		t.Fatalf("query included slow inventory sections: %q", output.String())
+	}
+	var jsonOutput bytes.Buffer
+	if err := writeQuery(&jsonOutput, inventory, "json"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonOutput.String(), `"hardware_version": "iDRAC9"`) ||
+		!strings.Contains(jsonOutput.String(), `"firmware_version": "7.20"`) {
+		t.Fatalf("JSON output = %q", jsonOutput.String())
 	}
 }
 
