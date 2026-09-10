@@ -52,13 +52,11 @@ Commands:
       --monitor to poll every five seconds and print only state changes; use
       --interval to select a different polling period.
 
-  settings drac
-      Show the curated iDRAC hostname, SNMP, Connection View, NTP, timezone,
-      and DNS settings.
-
-  settings bios
-      Show the curated HTTP boot, timezone, OS-to-BMC, IPMI, Secure Boot, and
-      PXE settings. Settings commands are read-only.
+  settings [drac|bios]
+      Show curated settings for both iDRAC and BIOS, or select one namespace.
+      Add --all for every available attribute or repeat --name to select
+      attributes. To change values, select drac or bios and repeat
+      --set NAME=VALUE. Unquoted values are parsed as JSON when possible.
 
 Common command options (place these after the command):
   --username NAME    BMC username; defaults to DRAC_USERNAME or root.
@@ -82,6 +80,8 @@ Examples:
   dracli status --monitor 10.46.96.160
   dracli query --output json 10.46.96.160
   dracli logs --all 10.46.96.160
+  dracli settings --name SecureBoot --name TimeZone 10.46.96.160
+  dracli settings bios --set SecureBoot=Disabled 10.46.96.160
   dracli --verify-tls settings bios 10.46.96.160
 
 Run "dracli <command> -help" for command options.
@@ -389,14 +389,19 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 }
 
 func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
-	if len(args) == 0 || (args[0] != "drac" && args[0] != "bios") {
-		return errors.New("usage: dracli settings <drac|bios> [options] <BMC IPv4 address>")
+	kind := ""
+	if len(args) > 0 && (args[0] == "drac" || args[0] == "bios") {
+		kind = args[0]
+		args = args[1:]
 	}
-	kind := args[0]
-	flags := flag.NewFlagSet("settings "+kind, flag.ContinueOnError)
+	commandName := "settings"
+	if kind != "" {
+		commandName += " " + kind
+	}
+	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: dracli settings %s [options] <BMC IPv4 address>\n\n", kind)
+		fmt.Fprintln(stderr, "Usage: dracli settings [drac|bios] [options] <BMC IPv4 address>")
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
@@ -407,8 +412,13 @@ func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) st
 	manager := flags.String("manager", "iDRAC.Embedded.1", "Redfish manager identifier")
 	system := flags.String("system", "System.Embedded.1", "Redfish system identifier")
 	timeout := flags.Duration("timeout", 30*time.Second, "HTTP request timeout")
+	all := flags.Bool("all", false, "show every available setting")
+	var names stringListFlag
+	var assignments stringListFlag
+	flags.Var(&names, "name", "show this setting (repeatable)")
+	flags.Var(&assignments, "set", "set NAME=VALUE; select drac or bios explicitly (repeatable)")
 
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -421,21 +431,100 @@ func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) st
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("invalid output format %q: use text or json", *output)
 	}
+	if *all && len(names) > 0 {
+		return errors.New("--all and --name cannot be used together")
+	}
+	if len(assignments) > 0 && (*all || len(names) > 0) {
+		return errors.New("--set cannot be combined with --all or --name")
+	}
+	if len(assignments) > 0 && kind == "" {
+		return errors.New("--set requires an explicit settings namespace: drac or bios")
+	}
 
 	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
 	if err != nil {
 		return err
 	}
-	var settings redfish.SettingsSelection
-	if kind == "drac" {
-		settings, err = client.DRACSettings(context.Background(), *manager)
-	} else {
-		settings, err = client.BIOSSettings(context.Background(), *system)
+	ctx := context.Background()
+	if len(assignments) > 0 {
+		values, parseErr := parseSettingsAssignments(assignments)
+		if parseErr != nil {
+			return parseErr
+		}
+		if kind == "drac" {
+			err = client.SetDRACSettings(ctx, *manager, values)
+		} else {
+			err = client.SetBIOSSettings(ctx, *system, values)
+		}
+		if err != nil {
+			return err
+		}
+		return writeSettingsUpdate(stdout, kind, values, *output)
 	}
+
+	load := func(namespace string) (redfish.SettingsSelection, error) {
+		switch {
+		case namespace == "drac" && *all:
+			return client.AllDRACSettings(ctx, *manager)
+		case namespace == "drac" && len(names) > 0:
+			return client.SelectedDRACSettings(ctx, *manager, names)
+		case namespace == "drac":
+			return client.DRACSettings(ctx, *manager)
+		case namespace == "bios" && *all:
+			return client.AllBIOSSettings(ctx, *system)
+		case namespace == "bios" && len(names) > 0:
+			return client.SelectedBIOSSettings(ctx, *system, names)
+		default:
+			return client.BIOSSettings(ctx, *system)
+		}
+	}
+	if kind != "" {
+		settings, loadErr := load(kind)
+		if loadErr != nil {
+			return loadErr
+		}
+		return writeSettings(stdout, settings, *output)
+	}
+	dracSettings, err := load("drac")
 	if err != nil {
-		return err
+		return fmt.Errorf("query iDRAC settings: %w", err)
 	}
-	return writeSettings(stdout, settings, *output)
+	biosSettings, err := load("bios")
+	if err != nil {
+		return fmt.Errorf("query BIOS settings: %w", err)
+	}
+	return writeSettingsGroups(stdout, dracSettings, biosSettings, *output)
+}
+
+type stringListFlag []string
+
+func (values *stringListFlag) String() string {
+	return strings.Join(*values, ",")
+}
+
+func (values *stringListFlag) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New("value must not be empty")
+	}
+	*values = append(*values, value)
+	return nil
+}
+
+func parseSettingsAssignments(assignments []string) (map[string]any, error) {
+	values := make(map[string]any, len(assignments))
+	for _, assignment := range assignments {
+		name, raw, found := strings.Cut(assignment, "=")
+		name = strings.TrimSpace(name)
+		if !found || name == "" {
+			return nil, fmt.Errorf("invalid setting %q: expected NAME=VALUE", assignment)
+		}
+		var value any
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			value = raw
+		}
+		values[name] = value
+	}
+	return values, nil
 }
 
 func newRedfishClient(host, username, password string, insecure bool, timeout time.Duration, getenv func(string) string) (*redfish.Client, error) {
@@ -598,6 +687,52 @@ func writeSettings(output io.Writer, settings redfish.SettingsSelection, format 
 			value = "not reported"
 		}
 		if _, err := fmt.Fprintf(output, "%s: %v\n", key, value); err != nil {
+			return fmt.Errorf("write text output: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeSettingsGroups(output io.Writer, dracSettings, biosSettings redfish.SettingsSelection, format string) error {
+	if format == "json" {
+		encoder := json.NewEncoder(output)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(map[string]redfish.SettingsSelection{"drac": dracSettings, "bios": biosSettings}); err != nil {
+			return fmt.Errorf("write JSON output: %w", err)
+		}
+		return nil
+	}
+	if _, err := fmt.Fprintln(output, "iDRAC settings:"); err != nil {
+		return fmt.Errorf("write text output: %w", err)
+	}
+	if err := writeSettings(output, dracSettings, format); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(output, "\nBIOS settings:"); err != nil {
+		return fmt.Errorf("write text output: %w", err)
+	}
+	return writeSettings(output, biosSettings, format)
+}
+
+func writeSettingsUpdate(output io.Writer, kind string, attributes map[string]any, format string) error {
+	if format == "json" {
+		encoder := json.NewEncoder(output)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(map[string]any{"namespace": kind, "accepted": true, "attributes": attributes}); err != nil {
+			return fmt.Errorf("write JSON output: %w", err)
+		}
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "%s settings update accepted:\n", kind); err != nil {
+		return fmt.Errorf("write text output: %w", err)
+	}
+	keys := make([]string, 0, len(attributes))
+	for key := range attributes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(output, "%s: %v\n", key, attributes[key]); err != nil {
 			return fmt.Errorf("write text output: %w", err)
 		}
 	}

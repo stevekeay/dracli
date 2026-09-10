@@ -1,6 +1,7 @@
 package redfish
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -174,6 +175,39 @@ func (c *Client) get(ctx context.Context, endpoint *url.URL, target any) error {
 	decoder := json.NewDecoder(response.Body)
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode response from %s: %w", endpoint.Redacted(), err)
+	}
+	return nil
+}
+
+func (c *Client) patchPath(ctx context.Context, path string, value any) error {
+	reference, err := url.Parse(path)
+	if err != nil {
+		return fmt.Errorf("parse Redfish path: %w", err)
+	}
+	endpoint := c.baseURL.ResolveReference(reference)
+	if !sameOrigin(c.baseURL, endpoint) {
+		return fmt.Errorf("refusing cross-origin Redfish path to %s", endpoint.Redacted())
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encode Redfish request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create Redfish request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(c.username, c.password)
+
+	response, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", endpoint.Redacted(), err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		return &HTTPError{URL: endpoint.Redacted(), StatusCode: response.StatusCode, Status: response.Status, Body: string(responseBody)}
 	}
 	return nil
 }

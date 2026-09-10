@@ -81,15 +81,29 @@ visible.
 every five seconds by default and prints only changes. JSON monitor output is
 newline-delimited JSON, one observation per changed state.
 
-## Curated settings
+## Settings
 
 ```sh
+./dracli settings 10.46.96.160
 ./dracli settings drac 10.46.96.160
-./dracli settings bios 10.46.96.160
-./dracli settings drac --output json 10.46.96.160
+./dracli settings drac --all 10.46.96.160
+./dracli settings bios --name SecureBoot --name TimeZone 10.46.96.160
 ```
 
-These commands report only the curated iDRAC and BIOS attributes. An attribute
-unsupported by a particular firmware version is shown as `not reported` in
-text output and `null` in JSON. They are read-only and do not compare or apply
-desired defaults.
+With no namespace, `settings` reports the curated iDRAC and BIOS attributes.
+Select a namespace for only that group, use `--all` for every attribute, or
+repeat `--name` to request particular attributes. An unsupported attribute is
+shown as `not reported` in text output and `null` in JSON.
+
+To change settings, explicitly select `drac` or `bios` and repeat `--set` as
+needed. Values are parsed as JSON when possible, so numbers and booleans keep
+their types; ordinary unquoted values remain strings.
+
+```sh
+./dracli settings bios --set SecureBoot=Disabled 10.46.96.160
+./dracli settings drac --set SNMP.1.AlertPort=161 10.46.96.160
+```
+
+Redfish may stage BIOS changes until the next reboot. The command reports that
+the controller accepted the update; it does not imply that a pending BIOS
+value is already active.

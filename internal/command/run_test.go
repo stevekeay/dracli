@@ -191,3 +191,60 @@ func TestWriteSettingsPreservesCuratedOrderAndReportsHostname(t *testing.T) {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
 }
+
+func TestParseSettingsAssignments(t *testing.T) {
+	t.Parallel()
+
+	values, err := parseSettingsAssignments([]string{
+		"SecureBoot=Disabled",
+		"SNMP.1.AlertPort=161",
+		`Label="maintenance host"`,
+		"Enabled=true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["SecureBoot"] != "Disabled" || values["SNMP.1.AlertPort"] != float64(161) ||
+		values["Label"] != "maintenance host" || values["Enabled"] != true {
+		t.Fatalf("values = %#v", values)
+	}
+	if _, err := parseSettingsAssignments([]string{"SecureBoot"}); err == nil {
+		t.Fatal("assignment without equals sign was accepted")
+	}
+}
+
+func TestWriteSettingsGroups(t *testing.T) {
+	t.Parallel()
+
+	drac := redfish.SettingsSelection{Hostname: "idrac01", IncludeHostname: true, Attributes: map[string]any{"NTP": "Enabled"}}
+	bios := redfish.SettingsSelection{Attributes: map[string]any{"SecureBoot": "Disabled"}}
+	var output bytes.Buffer
+	if err := writeSettingsGroups(&output, drac, bios, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "iDRAC settings:\nHostname: idrac01") ||
+		!strings.Contains(output.String(), "BIOS settings:\nSecureBoot: Disabled") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestSettingsRejectsAmbiguousOrConflictingModesBeforeConnecting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"settings", "--set", "SecureBoot=Disabled", "10.46.96.160"}, want: "requires an explicit settings namespace"},
+		{args: []string{"settings", "bios", "--all", "--name", "SecureBoot", "10.46.96.160"}, want: "--all and --name cannot be used together"},
+	}
+	for _, test := range tests {
+		var stderr bytes.Buffer
+		if exitCode := Run(test.args, io.Discard, &stderr, func(string) string { return "" }); exitCode != 1 {
+			t.Fatalf("args %v: exit code = %d", test.args, exitCode)
+		}
+		if !strings.Contains(stderr.String(), test.want) {
+			t.Fatalf("args %v: stderr = %q", test.args, stderr.String())
+		}
+	}
+}

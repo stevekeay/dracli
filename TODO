@@ -1,6 +1,6 @@
 1. [x] If no command is given, do the query command
 
-2. For query of settings add command line options (for both bios and for idrac) to:
+2. [x] For query of settings add command line options (for both bios and for idrac) to:
 
     - print out all available settings
     - query a specific setting(s) by name
@@ -28,3 +28,9 @@
     iDRAC: 16G Monolithic 7.30.10.50
 
 8. replace the example IP address with x.x.x.x
+
+9. Add a command to view the "job queue".  Add another command to clear it.
+
+10.  add a factory reset command (that does the reset operation where the IP address and username/password are  retained, but all other settings revert to factory defaults.)
+
+11. add a github workflow to lint and build binaries for linux amd64 and MAC.

@@ -45,17 +45,14 @@ type attributesResource struct {
 }
 
 func (c *Client) DRACSettings(ctx context.Context, managerID string) (SettingsSelection, error) {
+	return c.SelectedDRACSettings(ctx, managerID, dracSettingNames)
+}
+
+func (c *Client) SelectedDRACSettings(ctx context.Context, managerID string, names []string) (SettingsSelection, error) {
 	escapedManager := url.PathEscape(managerID)
-	var resource attributesResource
-	path := "/redfish/v1/Managers/" + escapedManager + "/Attributes"
-	if err := c.getPath(ctx, path, &resource); err != nil {
-		if !isUnsupported(err) {
-			return SettingsSelection{}, err
-		}
-		path = "/redfish/v1/Managers/" + escapedManager + "/Oem/Dell/DellAttributes/" + escapedManager
-		if err := c.getPath(ctx, path, &resource); err != nil {
-			return SettingsSelection{}, err
-		}
+	resource, _, err := c.dracAttributes(ctx, escapedManager)
+	if err != nil {
+		return SettingsSelection{}, err
 	}
 
 	hostname, err := c.managerHostname(ctx, managerID)
@@ -64,19 +61,74 @@ func (c *Client) DRACSettings(ctx context.Context, managerID string) (SettingsSe
 	}
 	return SettingsSelection{
 		Hostname:        hostname,
-		Attributes:      selectAttributes(resource.Attributes, dracSettingNames),
-		Order:           dracSettingNames,
+		Attributes:      selectAttributes(resource.Attributes, names),
+		Order:           names,
 		IncludeHostname: true,
 	}, nil
 }
 
+func (c *Client) AllDRACSettings(ctx context.Context, managerID string) (SettingsSelection, error) {
+	escapedManager := url.PathEscape(managerID)
+	resource, _, err := c.dracAttributes(ctx, escapedManager)
+	if err != nil {
+		return SettingsSelection{}, err
+	}
+	hostname, err := c.managerHostname(ctx, managerID)
+	if err != nil && !isUnsupported(err) {
+		return SettingsSelection{}, err
+	}
+	return SettingsSelection{Hostname: hostname, Attributes: resource.Attributes, IncludeHostname: true}, nil
+}
+
+func (c *Client) SetDRACSettings(ctx context.Context, managerID string, attributes map[string]any) error {
+	escapedManager := url.PathEscape(managerID)
+	_, path, err := c.dracAttributes(ctx, escapedManager)
+	if err != nil {
+		return err
+	}
+	return c.patchPath(ctx, path, attributesResource{Attributes: attributes})
+}
+
 func (c *Client) BIOSSettings(ctx context.Context, systemID string) (SettingsSelection, error) {
+	return c.SelectedBIOSSettings(ctx, systemID, biosSettingNames)
+}
+
+func (c *Client) SelectedBIOSSettings(ctx context.Context, systemID string, names []string) (SettingsSelection, error) {
 	var resource attributesResource
 	path := "/redfish/v1/Systems/" + url.PathEscape(systemID) + "/Bios"
 	if err := c.getPath(ctx, path, &resource); err != nil {
 		return SettingsSelection{}, err
 	}
-	return SettingsSelection{Attributes: selectAttributes(resource.Attributes, biosSettingNames), Order: biosSettingNames}, nil
+	return SettingsSelection{Attributes: selectAttributes(resource.Attributes, names), Order: names}, nil
+}
+
+func (c *Client) AllBIOSSettings(ctx context.Context, systemID string) (SettingsSelection, error) {
+	var resource attributesResource
+	path := "/redfish/v1/Systems/" + url.PathEscape(systemID) + "/Bios"
+	if err := c.getPath(ctx, path, &resource); err != nil {
+		return SettingsSelection{}, err
+	}
+	return SettingsSelection{Attributes: resource.Attributes}, nil
+}
+
+func (c *Client) SetBIOSSettings(ctx context.Context, systemID string, attributes map[string]any) error {
+	path := "/redfish/v1/Systems/" + url.PathEscape(systemID) + "/Bios/Settings"
+	return c.patchPath(ctx, path, attributesResource{Attributes: attributes})
+}
+
+func (c *Client) dracAttributes(ctx context.Context, escapedManager string) (attributesResource, string, error) {
+	var resource attributesResource
+	path := "/redfish/v1/Managers/" + escapedManager + "/Attributes"
+	if err := c.getPath(ctx, path, &resource); err == nil {
+		return resource, path, nil
+	} else if !isUnsupported(err) {
+		return attributesResource{}, "", err
+	}
+	path = "/redfish/v1/Managers/" + escapedManager + "/Oem/Dell/DellAttributes/" + escapedManager
+	if err := c.getPath(ctx, path, &resource); err != nil {
+		return attributesResource{}, "", err
+	}
+	return resource, path, nil
 }
 
 func (c *Client) managerHostname(ctx context.Context, managerID string) (string, error) {
