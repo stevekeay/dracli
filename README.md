@@ -27,6 +27,23 @@ or an error is available. Redirected and piped output contains no spinner.
 GitHub Actions checks formatting, runs `golangci-lint` and the race-enabled test suite,
 then publishes Linux AMD64 and macOS AMD64/ARM64 binaries as workflow artifacts.
 
+## Shell completion
+
+`dracli` can generate completion scripts for Bash and Zsh. Source the relevant
+script from your shell configuration:
+
+```sh
+# Bash
+source <(dracli completion bash)
+
+# Zsh (after compinit has been loaded)
+source <(dracli completion zsh)
+```
+
+The scripts complete commands, the `settings drac|bios` namespace, all command
+options, and known values such as `--output text|json`. To install the generated
+script permanently instead, redirect it to a file sourced by your shell.
+
 ## Lifecycle Controller logs
 
 By default, `dracli` derives the BMC password from `BMC_MASTER` using the same

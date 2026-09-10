@@ -36,6 +36,11 @@ Global options:
   --help        Show this guide. The aliases -h, -help, and help also work.
 
 Commands:
+  completion [bash|zsh]
+      Generate a completion script for the selected shell. Source the output
+      from your shell configuration to complete commands, options, and known
+      option values.
+
   logs
       Fetch Lifecycle Controller log entries and print their creation time and
       message. The first page is fetched by default. In an interactive terminal,
@@ -92,6 +97,8 @@ Output:
   for machine-readable output. Monitored JSON output is JSON Lines.
 
 Examples:
+  source <(dracli completion bash)
+  source <(dracli completion zsh)
   dracli status x.x.x.x
   dracli status --monitor x.x.x.x
   dracli query --output json x.x.x.x
@@ -140,6 +147,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	switch args[0] {
 	case "help", "-help", "--help", "-h":
 		_, _ = io.WriteString(stdout, usage)
+		return 0
+	case "completion":
+		if err := runCompletion(args[1:], stdout); err != nil {
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
+			return 1
+		}
 		return 0
 	case "logs", "lc-logs":
 		if err := runLogs(args[1:], stdin, stdout, stderr, getenv, interactive); err != nil {

@@ -71,6 +71,86 @@ func TestHelpFlagAliasesHelpCommand(t *testing.T) {
 	}
 }
 
+func TestCompletionScripts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		shell string
+		want  []string
+	}{
+		{
+			shell: "bash",
+			want: []string{
+				"complete -F _dracli dracli",
+				"completion logs lc-logs query inventory status jobs clear-jobs factory-reset settings help",
+				"--manager --system --all --name --set",
+				"drac bios",
+				"text json",
+			},
+		},
+		{
+			shell: "zsh",
+			want: []string{
+				"#compdef dracli",
+				"compdef _dracli dracli",
+				"'factory-reset:Reset iDRAC settings to factory defaults'",
+				"'--set:Set NAME=VALUE (repeatable)'",
+				"'settings namespace' drac bios",
+				"'output format' text json",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.shell, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exitCode := Run([]string{"completion", test.shell}, &stdout, &stderr, func(string) string { return "" })
+			if exitCode != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			for _, want := range test.want {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("completion output does not contain %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestCompletionRejectsUnsupportedShell(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := Run([]string{"completion", "fish"}, &stdout, &stderr, func(string) string { return "" })
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `unsupported shell "fish": use bash or zsh`) {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestCompletionHelp(t *testing.T) {
+	t.Parallel()
+
+	for _, help := range []string{"--help", "-help", "-h"} {
+		var stdout, stderr bytes.Buffer
+		exitCode := Run([]string{"completion", help}, &stdout, &stderr, func(string) string { return "" })
+		if exitCode != 0 {
+			t.Errorf("%s: exit code = %d, stderr = %q", help, exitCode, stderr.String())
+		}
+		if stdout.String() != "Usage: dracli completion <bash|zsh>\n" {
+			t.Errorf("%s: stdout = %q", help, stdout.String())
+		}
+	}
+}
+
 func TestInsecureMayPrecedeCommand(t *testing.T) {
 	t.Parallel()
 
