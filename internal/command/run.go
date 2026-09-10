@@ -108,9 +108,18 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	return run(args, nil, stdout, stderr, getenv, false)
 }
 
-// RunCLI enables terminal-only behavior such as interactive log pagination.
+// RunCLI enables terminal-only behavior such as progress display and
+// interactive log pagination.
 func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
-	return run(args, stdin, stdout, stderr, getenv, isTerminal(stdin) && isTerminal(stdout))
+	interactive := isTerminal(stdin) && isTerminal(stdout)
+	description := progressDescription(args)
+	if !isTerminal(stdout) || description == "" {
+		return run(args, stdin, stdout, stderr, getenv, interactive)
+	}
+
+	progress := newTerminalProgress(stdout, description)
+	defer progress.Stop()
+	return run(args, stdin, progress.StopOnWrite(stdout), progress.StopOnWrite(stderr), getenv, interactive)
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, interactive bool) int {
@@ -121,7 +130,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	var err error
 	args, err = normalizeGlobalArgs(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "dracli: %v\n\n%s", err, usage)
+		_, _ = fmt.Fprintf(stderr, "dracli: %v\n\n%s", err, usage)
 		return 2
 	}
 	if net.ParseIP(args[0]) != nil {
@@ -134,54 +143,54 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return 0
 	case "logs", "lc-logs":
 		if err := runLogs(args[1:], stdin, stdout, stderr, getenv, interactive); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	case "query":
 		if err := runInventory(args[1:], stdout, stderr, getenv, false); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	case "inventory":
 		if err := runInventory(args[1:], stdout, stderr, getenv, true); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	case "status":
 		if err := runStatus(args[1:], stdout, stderr, getenv); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	case "jobs":
 		if err := runJobs(args[1:], stdout, stderr, getenv, false); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	case "clear-jobs":
 		if err := runJobs(args[1:], stdout, stderr, getenv, true); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	case "factory-reset":
 		if err := runFactoryReset(args[1:], stdout, stderr, getenv); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	case "settings":
 		if err := runSettings(args[1:], stdout, stderr, getenv); err != nil {
-			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
 	default:
-		fmt.Fprintf(stderr, "dracli: unknown command %q\n\n%s", args[0], usage)
+		_, _ = fmt.Fprintf(stderr, "dracli: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
 }
@@ -224,8 +233,8 @@ func runLogs(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv fu
 	flags := flag.NewFlagSet("logs", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: dracli logs [options] <BMC IPv4 address>")
-		fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "Usage: dracli logs [options] <BMC IPv4 address>")
+		_, _ = fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
@@ -273,7 +282,7 @@ func runLogs(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv fu
 			return false, nil
 		}
 		if !interactive || *output == "json" {
-			fmt.Fprintf(stderr, "dracli: page %d fetched; more log entries are available; add --all (for example: %s)\n", page.Number, allLogsExample(flags.Arg(0), *verifyTLS, *output))
+			_, _ = fmt.Fprintf(stderr, "dracli: page %d fetched; more log entries are available; add --all (for example: %s)\n", page.Number, allLogsExample(flags.Arg(0), *verifyTLS, *output))
 			return false, nil
 		}
 		return promptForNextLogPage(reader, stderr), nil
@@ -281,10 +290,10 @@ func runLogs(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv fu
 }
 
 func promptForNextLogPage(reader *bufio.Reader, output io.Writer) bool {
-	fmt.Fprint(output, "More log entries are available; press Enter for the next page, or q then Enter to quit: ")
+	_, _ = fmt.Fprint(output, "More log entries are available; press Enter for the next page, or q then Enter to quit: ")
 	answer, err := reader.ReadString('\n')
 	if err != nil && len(answer) == 0 {
-		fmt.Fprintln(output)
+		_, _ = fmt.Fprintln(output)
 		return false
 	}
 	return !strings.EqualFold(strings.TrimSpace(answer), "q")
@@ -318,8 +327,8 @@ func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) s
 	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: dracli %s [options] <BMC IPv4 address>\n", commandName)
-		fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintf(stderr, "Usage: dracli %s [options] <BMC IPv4 address>\n", commandName)
+		_, _ = fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
@@ -368,8 +377,8 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: dracli status [options] <BMC IPv4 address>")
-		fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "Usage: dracli status [options] <BMC IPv4 address>")
+		_, _ = fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
@@ -449,7 +458,7 @@ func runJobs(args []string, stdout, stderr io.Writer, getenv func(string) string
 	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: dracli %s [options] <BMC IPv4 address>\n\n", commandName)
+		_, _ = fmt.Fprintf(stderr, "Usage: dracli %s [options] <BMC IPv4 address>\n\n", commandName)
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
@@ -498,8 +507,8 @@ func runFactoryReset(args []string, stdout, stderr io.Writer, getenv func(string
 	flags := flag.NewFlagSet("factory-reset", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: dracli factory-reset --yes [options] <BMC IPv4 address>")
-		fmt.Fprintln(stderr)
+		_, _ = fmt.Fprintln(stderr, "Usage: dracli factory-reset --yes [options] <BMC IPv4 address>")
+		_, _ = fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
@@ -560,7 +569,7 @@ func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) st
 	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: dracli settings [drac|bios] [options] <BMC IPv4 address>")
+		_, _ = fmt.Fprintln(stderr, "Usage: dracli settings [drac|bios] [options] <BMC IPv4 address>")
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
@@ -697,7 +706,7 @@ func newRedfishClient(host, username, password string, insecure bool, timeout ti
 	}
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: insecure} //nolint:gosec -- explicitly requested by the operator
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: insecure}
 	httpClient := &http.Client{Transport: transport, Timeout: timeout}
 	return redfish.NewClient("https://"+host, username, resolvedPassword, httpClient)
 }

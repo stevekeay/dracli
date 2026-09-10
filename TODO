@@ -35,4 +35,4 @@
 
 11. [x] add a github workflow to lint and build binaries for linux amd64 and MAC.
 
-12.   detect if the output is to a terminal and if so, print some kind of spinner output showing what is happening while the user is waiting for output.  This can be overwritten by the actual output once it arrives.
+12. [x] detect if the output is to a terminal and if so, print some kind of spinner output showing what is happening while the user is waiting for output.  This can be overwritten by the actual output once it arrives.

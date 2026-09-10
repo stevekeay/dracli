@@ -57,13 +57,13 @@ func NewClient(baseURL, username, password string, httpClient *http.Client) (*Cl
 		return nil, fmt.Errorf("parse Redfish base URL: %w", err)
 	}
 	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return nil, errors.New("Redfish base URL must use http or https")
+		return nil, errors.New("redfish base URL must use http or https")
 	}
 	if parsed.Host == "" {
-		return nil, errors.New("Redfish base URL has no host")
+		return nil, errors.New("redfish base URL has no host")
 	}
 	if parsed.User != nil {
-		return nil, errors.New("Redfish base URL must not contain credentials")
+		return nil, errors.New("redfish base URL must not contain credentials")
 	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -90,7 +90,7 @@ func (c *Client) LifecycleLogPages(ctx context.Context, managerID string, visit 
 
 	for page := 0; page < maxPages; page++ {
 		if _, exists := seen[pageURL.String()]; exists {
-			return fmt.Errorf("Redfish pagination loop at %s", pageURL.Redacted())
+			return fmt.Errorf("redfish pagination loop at %s", pageURL.Redacted())
 		}
 		seen[pageURL.String()] = struct{}{}
 
@@ -125,7 +125,7 @@ func (c *Client) LifecycleLogPages(ctx context.Context, managerID string, visit 
 		pageURL = nextURL
 	}
 
-	return fmt.Errorf("Redfish response exceeded %d pages", maxPages)
+	return fmt.Errorf("redfish response exceeded %d pages", maxPages)
 }
 
 func (c *Client) getCollection(ctx context.Context, endpoint *url.URL) (collection, error) {
@@ -160,7 +160,7 @@ func (c *Client) get(ctx context.Context, endpoint *url.URL, target any) error {
 	if err != nil {
 		return fmt.Errorf("request %s: %w", endpoint.Redacted(), err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
@@ -212,7 +212,7 @@ func (c *Client) sendPath(ctx context.Context, method, path string, value any) e
 	if err != nil {
 		return fmt.Errorf("request %s: %w", endpoint.Redacted(), err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 		return &HTTPError{URL: endpoint.Redacted(), StatusCode: response.StatusCode, Status: response.Status, Body: string(responseBody)}

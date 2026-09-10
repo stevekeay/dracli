@@ -14,6 +14,10 @@ the certificate and hostname:
 
 `--insecure` remains accepted as an explicit spelling of the default.
 
+When standard output is a terminal, commands show a short activity spinner
+while waiting for iDRAC. The spinner line is cleared as soon as command output
+or an error is available. Redirected and piped output contains no spinner.
+
 ## Build
 
 ```sh

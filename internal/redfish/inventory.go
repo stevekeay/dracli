@@ -523,7 +523,7 @@ func (c *Client) collectionMembers(ctx context.Context, path string) ([]json.Raw
 	var members []json.RawMessage
 	for page := 0; page < maxPages; page++ {
 		if _, exists := seen[pageURL.String()]; exists {
-			return nil, fmt.Errorf("Redfish pagination loop at %s", pageURL.Redacted())
+			return nil, fmt.Errorf("redfish pagination loop at %s", pageURL.Redacted())
 		}
 		seen[pageURL.String()] = struct{}{}
 		var current collection
@@ -547,7 +547,7 @@ func (c *Client) collectionMembers(ctx context.Context, path string) ([]json.Raw
 			return nil, fmt.Errorf("refusing cross-origin Redfish next link to %s", pageURL.Redacted())
 		}
 	}
-	return nil, fmt.Errorf("Redfish response exceeded %d pages", maxPages)
+	return nil, fmt.Errorf("redfish response exceeded %d pages", maxPages)
 }
 
 func (c *Client) memberResource(ctx context.Context, raw json.RawMessage, target any) error {
