@@ -201,6 +201,32 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 	}
 }
 
+func TestQuerySystemSummaryOrder(t *testing.T) {
+	t.Parallel()
+
+	inventory := redfish.Inventory{
+		System:       redfish.SystemSummary{Manufacturer: "Dell Inc.", Model: "PowerEdge XE8640"},
+		SerialNumber: "ABC1234D",
+		Memory:       redfish.MemorySummary{TotalGiB: 2048},
+		CPU:          redfish.ProcessorSummary{Count: 2, Model: "Intel Xeon", Cores: 96, Threads: 192},
+		BIOSVersion:  "2.8.2",
+		IDRAC:        redfish.FirmwareSummary{Model: "16G Monolithic", Version: "7.30.10.50"},
+	}
+	var output bytes.Buffer
+	if err := writeQuery(&output, inventory, "text"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"System:", "Serial Number:", "Memory:", "CPU:", "BIOS:", "iDRAC:"}
+	previous := -1
+	for _, label := range want {
+		index := strings.Index(output.String(), label)
+		if index <= previous {
+			t.Fatalf("%s is out of order in %q", label, output.String())
+		}
+		previous = index
+	}
+}
+
 func TestTLSVerificationOverridesInsecureDefault(t *testing.T) {
 	t.Parallel()
 

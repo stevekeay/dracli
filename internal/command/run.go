@@ -590,10 +590,10 @@ func writeInventoryDetails(output io.Writer, inventory redfish.Inventory, format
 	lines := []string{
 		inventoryLine(inventory, "system", "System", joinKnown(inventory.System.Manufacturer, inventory.System.Model)),
 		inventoryLine(inventory, "serial_number", "Serial Number", known(inventory.SerialNumber)),
-		inventoryLine(inventory, "idrac", "iDRAC", joinKnown(inventory.IDRAC.Model, inventory.IDRAC.Version)),
-		inventoryLine(inventory, "bios", "BIOS", known(inventory.BIOSVersion)),
 		inventoryLine(inventory, "memory", "Memory", fmt.Sprintf("%g GiB", inventory.Memory.TotalGiB)),
 		inventoryLine(inventory, "cpu", "CPU", fmt.Sprintf("%d x %s (%d cores, %d threads)", inventory.CPU.Count, known(inventory.CPU.Model), inventory.CPU.Cores, inventory.CPU.Threads)),
+		inventoryLine(inventory, "bios", "BIOS", known(inventory.BIOSVersion)),
+		inventoryLine(inventory, "idrac", "iDRAC", joinKnown(inventory.IDRAC.Model, inventory.IDRAC.Version)),
 	}
 	if message, failed := inventory.Errors["status"]; failed {
 		lines = append(lines, "Status: "+message)

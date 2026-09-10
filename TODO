@@ -18,7 +18,7 @@
 
 6. [x] let's see if we can find the idrac hardware version like idrac9 or whatever, including this in the query output.
 
-7. The query output is confusing because mem and cpu are system attributes, not idrac attriutes.  So change the order as follows:
+7. [x] The query output is confusing because mem and cpu are system attributes, not idrac attriutes.  So change the order as follows:
 
     System: Dell Inc. PowerEdge XE8640
     Serial Number: ABC1234D
