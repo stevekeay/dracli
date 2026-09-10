@@ -101,6 +101,17 @@ timestamps. `clear-jobs` deletes the complete queue using Dell's
 `DellJobService.DeleteJobQueue` action with `JID_CLEARALL`; it does not restart
 Lifecycle Controller services. Clearing the queue cannot be undone.
 
+## Factory reset
+
+```sh
+./dracli factory-reset --yes x.x.x.x
+```
+
+`factory-reset` uses Dell's `DellManager.ResetToDefaults` action with reset type
+`Default`. This restores iDRAC settings to factory defaults while retaining the
+network configuration and user accounts, so the current address and credentials
+continue to work. The disruptive operation is rejected unless `--yes` is given.
+
 ## Settings
 
 ```sh

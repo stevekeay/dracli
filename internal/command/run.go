@@ -63,6 +63,11 @@ Commands:
       Delete every entry in the iDRAC job queue. This operation cannot be
       undone and does not restart Lifecycle Controller services.
 
+  factory-reset
+      Reset iDRAC settings to factory defaults while preserving its network
+      configuration and user accounts. This disruptive operation requires
+      --yes.
+
   settings [drac|bios]
       Show curated settings for both iDRAC and BIOS, or select one namespace.
       Add --all for every available attribute or repeat --name to select
@@ -91,6 +96,7 @@ Examples:
   dracli status --monitor x.x.x.x
   dracli query --output json x.x.x.x
   dracli logs --all x.x.x.x
+  dracli factory-reset --yes x.x.x.x
   dracli settings --name SecureBoot --name TimeZone x.x.x.x
   dracli settings bios --set SecureBoot=Disabled x.x.x.x
   dracli --verify-tls settings bios x.x.x.x
@@ -158,6 +164,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return 0
 	case "clear-jobs":
 		if err := runJobs(args[1:], stdout, stderr, getenv, true); err != nil {
+			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			return 1
+		}
+		return 0
+	case "factory-reset":
+		if err := runFactoryReset(args[1:], stdout, stderr, getenv); err != nil {
 			fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
@@ -480,6 +492,59 @@ func runJobs(args []string, stdout, stderr io.Writer, getenv func(string) string
 		return err
 	}
 	return writeJobs(stdout, jobs, *output)
+}
+
+func runFactoryReset(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	flags := flag.NewFlagSet("factory-reset", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: dracli factory-reset --yes [options] <BMC IPv4 address>")
+		fmt.Fprintln(stderr)
+		flags.PrintDefaults()
+	}
+	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
+	username := flags.String("username", envOrDefault(getenv, "DRAC_USERNAME", "root"), "BMC username")
+	insecure := flags.Bool("insecure", false, "explicitly skip TLS certificate verification (the default)")
+	verifyTLS := flags.Bool("verify-tls", false, "validate the BMC TLS certificate and hostname")
+	output := flags.String("output", "text", "output format: text or json")
+	manager := flags.String("manager", "iDRAC.Embedded.1", "Redfish manager identifier")
+	timeout := flags.Duration("timeout", 30*time.Second, "HTTP request timeout")
+	confirmed := flags.Bool("yes", false, "confirm the factory reset without prompting")
+
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 1 {
+		flags.Usage()
+		return errors.New("exactly one BMC IPv4 address is required")
+	}
+	if *output != "text" && *output != "json" {
+		return fmt.Errorf("invalid output format %q: use text or json", *output)
+	}
+	if !*confirmed {
+		return errors.New("refusing to reset iDRAC settings without --yes")
+	}
+
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	if err != nil {
+		return err
+	}
+	if err := client.ResetToDefaults(context.Background(), *manager); err != nil {
+		return err
+	}
+	if *output == "json" {
+		return json.NewEncoder(stdout).Encode(map[string]any{
+			"accepted":            true,
+			"reset_type":          "Default",
+			"preserves_network":   true,
+			"preserves_user_data": true,
+		})
+	}
+	_, err = fmt.Fprintln(stdout, "iDRAC factory reset accepted; network configuration and user accounts are preserved.")
+	return err
 }
 
 func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) string) error {

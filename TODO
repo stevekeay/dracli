@@ -31,7 +31,7 @@
 
 9. [x] Add a command to view the "job queue".  Add another command to clear it.
 
-10.  add a factory reset command (that does the reset operation where the IP address and username/password are  retained, but all other settings revert to factory defaults.)
+10. [x] add a factory reset command (that does the reset operation where the IP address and username/password are  retained, but all other settings revert to factory defaults.)
 
 11. add a github workflow to lint and build binaries for linux amd64 and MAC.
 

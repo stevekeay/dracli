@@ -336,3 +336,19 @@ func TestSettingsRejectsAmbiguousOrConflictingModesBeforeConnecting(t *testing.T
 		}
 	}
 }
+
+func TestFactoryResetRequiresExplicitConfirmationBeforeConnecting(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	exitCode := Run([]string{"factory-reset", "10.46.96.160"}, io.Discard, &stderr, func(string) string { return "" })
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "without --yes") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "BMC_MASTER") {
+		t.Fatalf("factory reset attempted credential resolution before confirmation: %q", stderr.String())
+	}
+}
