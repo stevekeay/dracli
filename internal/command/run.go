@@ -589,6 +589,7 @@ func writeInventoryDetails(output io.Writer, inventory redfish.Inventory, format
 
 	lines := []string{
 		inventoryLine(inventory, "system", "System", joinKnown(inventory.System.Manufacturer, inventory.System.Model)),
+		inventoryLine(inventory, "serial_number", "Serial Number", known(inventory.SerialNumber)),
 		inventoryLine(inventory, "idrac", "iDRAC", joinKnown(inventory.IDRAC.Model, inventory.IDRAC.Version)),
 		inventoryLine(inventory, "bios", "BIOS", known(inventory.BIOSVersion)),
 		inventoryLine(inventory, "memory", "Memory", fmt.Sprintf("%g GiB", inventory.Memory.TotalGiB)),

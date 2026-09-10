@@ -14,7 +14,7 @@
 
 4. [x] query is simply too slow.  Let's either make it incremental (so the system is displayed first and futher details as they arrive) or make separate command for query versus inventory.  Let's also add the "status" output to the query command.
 
-5. Let's add the dell service tag to the query output: "Serial Number: ABC1234D"
+5. [x] Let's add the dell service tag to the query output: "Serial Number: ABC1234D"
 
 6. let's see if we can find the idrac hardware version like idrac9 or whatever, including this in the query output.
 

@@ -68,9 +68,10 @@ the process list; `DRAC_PASSWORD` is preferable for ad-hoc use.
 ```
 
 `query` is the fast overview: it makes only the system and manager requests and
-reports server and iDRAC models, firmware, BIOS, memory, CPU, current power and
-boot-progress status, and clock agreement. `inventory` adds the slower RAID and
-NIC collection traversal. NIC output includes make, model, slot, MAC addresses,
+reports the Dell service tag, server and iDRAC models, firmware, BIOS, memory,
+CPU, current power and boot-progress status, and clock agreement. `inventory`
+adds the slower RAID and NIC collection traversal. NIC output includes make,
+model, slot, MAC addresses,
 link and speed when supplied by Redfish, plus Dell Connection View LLDP switch
 and port data when enabled by the iDRAC.
 

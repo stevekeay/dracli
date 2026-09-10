@@ -167,7 +167,8 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 	t.Parallel()
 
 	inventory := redfish.Inventory{
-		System: redfish.SystemSummary{Manufacturer: "Dell", Model: "PowerEdge"},
+		System:       redfish.SystemSummary{Manufacturer: "Dell", Model: "PowerEdge"},
+		SerialNumber: "ABC1234D",
 		Status: redfish.SystemStatus{
 			PowerState: "On",
 			BootProgress: redfish.BootProgress{
@@ -180,7 +181,8 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 	if err := writeQuery(&output, inventory, "text"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Power state: On") ||
+	if !strings.Contains(output.String(), "Serial Number: ABC1234D") ||
+		!strings.Contains(output.String(), "Power state: On") ||
 		!strings.Contains(output.String(), "Boot progress: OSRunning at 2026-09-10T07:00:00Z") {
 		t.Fatalf("output = %q", output.String())
 	}

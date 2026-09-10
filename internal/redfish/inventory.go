@@ -19,6 +19,7 @@ const (
 
 type Inventory struct {
 	System          SystemSummary     `json:"system"`
+	SerialNumber    string            `json:"serial_number,omitempty"`
 	IDRAC           FirmwareSummary   `json:"idrac"`
 	BIOSVersion     string            `json:"bios_version,omitempty"`
 	Memory          MemorySummary     `json:"memory"`
@@ -86,6 +87,7 @@ type LLDPSummary struct {
 type systemResource struct {
 	Manufacturer     string            `json:"Manufacturer"`
 	Model            string            `json:"Model"`
+	SerialNumber     string            `json:"SerialNumber"`
 	BiosVersion      string            `json:"BiosVersion"`
 	MemorySummary    memoryResource    `json:"MemorySummary"`
 	ProcessorSummary processorResource `json:"ProcessorSummary"`
@@ -208,9 +210,10 @@ func (c *Client) Query(ctx context.Context, systemID, managerID string) (Invento
 		if fatalInventoryError(err) {
 			return Inventory{}, err
 		}
-		markUnavailable(&result, "system", "bios", "memory", "cpu", "status")
+		markUnavailable(&result, "system", "serial_number", "bios", "memory", "cpu", "status")
 	} else {
 		result.System = SystemSummary{Manufacturer: system.Manufacturer, Model: system.Model}
+		result.SerialNumber = system.SerialNumber
 		result.BIOSVersion = system.BiosVersion
 		result.Memory = MemorySummary{TotalGiB: system.MemorySummary.TotalSystemMemoryGiB}
 		result.CPU = ProcessorSummary{

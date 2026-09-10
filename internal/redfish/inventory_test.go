@@ -73,7 +73,7 @@ func TestQueryUsesOnlySummaryResourcesAndIncludesSystemStatus(t *testing.T) {
 		requests++
 		switch request.URL.Path {
 		case "/redfish/v1/Systems/System.Embedded.1":
-			return jsonResponse(http.StatusOK, `{"Manufacturer":"Dell","Model":"PowerEdge","PowerState":"On","BootProgress":{"LastState":"OSRunning","LastStateTime":"2026-09-10T07:00:00Z"}}`), nil
+			return jsonResponse(http.StatusOK, `{"Manufacturer":"Dell","Model":"PowerEdge","SerialNumber":"ABC1234D","PowerState":"On","BootProgress":{"LastState":"OSRunning","LastStateTime":"2026-09-10T07:00:00Z"}}`), nil
 		case "/redfish/v1/Managers/iDRAC.Embedded.1":
 			return jsonResponse(http.StatusOK, `{"Model":"iDRAC9","FirmwareVersion":"7.20","DateTime":"2026-09-10T08:00:00+01:00"}`), nil
 		default:
@@ -91,6 +91,9 @@ func TestQueryUsesOnlySummaryResourcesAndIncludesSystemStatus(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if result.SerialNumber != "ABC1234D" {
+		t.Fatalf("serial number = %q", result.SerialNumber)
 	}
 	if result.Status.PowerState != "On" || result.Status.BootProgress.LastState != "OSRunning" {
 		t.Fatalf("status = %#v", result.Status)
