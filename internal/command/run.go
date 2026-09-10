@@ -41,11 +41,14 @@ Commands:
       message. The first page is fetched by default. In an interactive terminal,
       press Enter to fetch each additional page; use --all to fetch every page.
 
-  inventory (alias: query)
-      Show a brief hardware and firmware summary: server make/model, iDRAC and
-      BIOS versions, memory, CPU, RAID controllers, and NIC details. NIC output
+  query
+      Quickly show system, firmware, memory, CPU, power/boot status, and the
+      iDRAC clock comparison. This is the default command when only an IP is
+      supplied.
+
+  inventory
+      Show the query summary plus RAID controllers and NIC details. NIC output
       includes FQDD/slot, make/model, MAC, link, speed, and LLDP when available.
-      The query also checks the iDRAC clock against local system time.
 
   status
       Show the current power state and boot progress with timestamps. Add
@@ -121,8 +124,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 			return 1
 		}
 		return 0
-	case "inventory", "query":
-		if err := runInventory(args[1:], stdout, stderr, getenv); err != nil {
+	case "query":
+		if err := runInventory(args[1:], stdout, stderr, getenv, false); err != nil {
+			fmt.Fprintf(stderr, "dracli: %v\n", err)
+			return 1
+		}
+		return 0
+	case "inventory":
+		if err := runInventory(args[1:], stdout, stderr, getenv, true); err != nil {
 			fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
@@ -269,11 +278,15 @@ func isTerminal(value any) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
-	flags := flag.NewFlagSet("inventory", flag.ContinueOnError)
+func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) string, detailed bool) error {
+	commandName := "query"
+	if detailed {
+		commandName = "inventory"
+	}
+	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: dracli inventory [options] <BMC IPv4 address>")
+		fmt.Fprintf(stderr, "Usage: dracli %s [options] <BMC IPv4 address>\n", commandName)
 		fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
@@ -304,9 +317,17 @@ func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) s
 	if err != nil {
 		return err
 	}
-	inventory, err := client.Inventory(context.Background(), *system, *manager)
+	var inventory redfish.Inventory
+	if detailed {
+		inventory, err = client.Inventory(context.Background(), *system, *manager)
+	} else {
+		inventory, err = client.Query(context.Background(), *system, *manager)
+	}
 	if err != nil {
 		return err
+	}
+	if !detailed {
+		return writeQuery(stdout, inventory, *output)
 	}
 	return writeInventory(stdout, inventory, *output)
 }
@@ -549,6 +570,14 @@ func skipTLSVerification(insecure, verifyTLS bool) bool {
 }
 
 func writeInventory(output io.Writer, inventory redfish.Inventory, format string) error {
+	return writeInventoryDetails(output, inventory, format, true)
+}
+
+func writeQuery(output io.Writer, inventory redfish.Inventory, format string) error {
+	return writeInventoryDetails(output, inventory, format, false)
+}
+
+func writeInventoryDetails(output io.Writer, inventory redfish.Inventory, format string, detailed bool) error {
 	if format == "json" {
 		encoder := json.NewEncoder(output)
 		encoder.SetIndent("", "  ")
@@ -565,6 +594,16 @@ func writeInventory(output io.Writer, inventory redfish.Inventory, format string
 		inventoryLine(inventory, "memory", "Memory", fmt.Sprintf("%g GiB", inventory.Memory.TotalGiB)),
 		inventoryLine(inventory, "cpu", "CPU", fmt.Sprintf("%d x %s (%d cores, %d threads)", inventory.CPU.Count, known(inventory.CPU.Model), inventory.CPU.Cores, inventory.CPU.Threads)),
 	}
+	if message, failed := inventory.Errors["status"]; failed {
+		lines = append(lines, "Status: "+message)
+	} else {
+		lines = append(lines, "Power state: "+known(inventory.Status.PowerState))
+		boot := known(inventory.Status.BootProgress.LastState)
+		if inventory.Status.BootProgress.LastStateTime != "" {
+			boot += " at " + inventory.Status.BootProgress.LastStateTime
+		}
+		lines = append(lines, "Boot progress: "+boot)
+	}
 	if message, failed := inventory.Errors["clock"]; failed {
 		lines = append(lines, "DRAC clock: "+message)
 	} else {
@@ -577,6 +616,12 @@ func writeInventory(output io.Writer, inventory redfish.Inventory, format string
 		} else {
 			lines = append(lines, fmt.Sprintf("DRAC clock agrees with local system time within %d seconds", drift))
 		}
+	}
+	if !detailed {
+		if _, err := fmt.Fprintln(output, strings.Join(lines, "\n")); err != nil {
+			return fmt.Errorf("write text output: %w", err)
+		}
+		return nil
 	}
 	lines = append(lines, "RAID controllers:")
 	if message, failed := inventory.Errors["raid_controllers"]; failed {

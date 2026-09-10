@@ -67,13 +67,15 @@ the process list; `DRAC_PASSWORD` is preferable for ad-hoc use.
 ./dracli status --monitor --interval 10s 10.46.96.160
 ```
 
-`inventory` (also available as `query`) reports the server and iDRAC models,
-firmware, BIOS, memory, CPU, RAID controllers, and NIC FQDDs. NIC output includes
-make, model, slot, MAC addresses, link and speed when supplied by Redfish, plus
-Dell Connection View LLDP switch and port data when enabled by the iDRAC.
-It also compares the iDRAC `DateTime` with local system time, accounting for
-RFC 3339 timezone offsets, and prints a warning when drift exceeds 60
-seconds. If one Redfish section cannot be decoded, that section is marked
+`query` is the fast overview: it makes only the system and manager requests and
+reports server and iDRAC models, firmware, BIOS, memory, CPU, current power and
+boot-progress status, and clock agreement. `inventory` adds the slower RAID and
+NIC collection traversal. NIC output includes make, model, slot, MAC addresses,
+link and speed when supplied by Redfish, plus Dell Connection View LLDP switch
+and port data when enabled by the iDRAC.
+
+The clock comparison accounts for RFC 3339 timezone offsets and prints a warning
+when drift exceeds 60 seconds. If one Redfish section cannot be decoded, it is marked
 `UNABLE TO PARSE REDFISH RESPONSE` while successfully decoded sections remain
 visible.
 

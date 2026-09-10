@@ -163,6 +163,32 @@ func TestWriteInventoryReportsPartialFailureAndClockWarning(t *testing.T) {
 	}
 }
 
+func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
+	t.Parallel()
+
+	inventory := redfish.Inventory{
+		System: redfish.SystemSummary{Manufacturer: "Dell", Model: "PowerEdge"},
+		Status: redfish.SystemStatus{
+			PowerState: "On",
+			BootProgress: redfish.BootProgress{
+				LastState: "OSRunning", LastStateTime: "2026-09-10T07:00:00Z",
+			},
+		},
+		Clock: redfish.ClockSummary{DriftSeconds: 1},
+	}
+	var output bytes.Buffer
+	if err := writeQuery(&output, inventory, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Power state: On") ||
+		!strings.Contains(output.String(), "Boot progress: OSRunning at 2026-09-10T07:00:00Z") {
+		t.Fatalf("output = %q", output.String())
+	}
+	if strings.Contains(output.String(), "RAID controllers:") || strings.Contains(output.String(), "NICs:") {
+		t.Fatalf("query included slow inventory sections: %q", output.String())
+	}
+}
+
 func TestTLSVerificationOverridesInsecureDefault(t *testing.T) {
 	t.Parallel()
 

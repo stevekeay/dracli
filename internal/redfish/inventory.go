@@ -23,8 +23,9 @@ type Inventory struct {
 	BIOSVersion     string            `json:"bios_version,omitempty"`
 	Memory          MemorySummary     `json:"memory"`
 	CPU             ProcessorSummary  `json:"cpu"`
-	RAIDControllers []RAIDController  `json:"raid_controllers"`
-	NICs            []NIC             `json:"nics"`
+	Status          SystemStatus      `json:"status"`
+	RAIDControllers []RAIDController  `json:"raid_controllers,omitempty"`
+	NICs            []NIC             `json:"nics,omitempty"`
 	Clock           ClockSummary      `json:"clock"`
 	Errors          map[string]string `json:"errors,omitempty"`
 }
@@ -88,6 +89,11 @@ type systemResource struct {
 	BiosVersion      string            `json:"BiosVersion"`
 	MemorySummary    memoryResource    `json:"MemorySummary"`
 	ProcessorSummary processorResource `json:"ProcessorSummary"`
+	PowerState       string            `json:"PowerState"`
+	BootProgress     struct {
+		LastState     string `json:"LastState"`
+		LastStateTime string `json:"LastStateTime"`
+	} `json:"BootProgress"`
 }
 
 type memoryResource struct {
@@ -161,6 +167,38 @@ type link struct {
 }
 
 func (c *Client) Inventory(ctx context.Context, systemID, managerID string) (Inventory, error) {
+	result, err := c.Query(ctx, systemID, managerID)
+	if err != nil {
+		return Inventory{}, err
+	}
+	if result.Errors == nil {
+		result.Errors = make(map[string]string)
+	}
+	escapedSystem := url.PathEscape(systemID)
+	result.RAIDControllers, err = c.raidControllers(ctx, escapedSystem)
+	if err != nil {
+		if fatalInventoryError(err) {
+			return Inventory{}, err
+		}
+		markUnavailable(&result, "raid_controllers")
+	}
+	result.NICs, err = c.nics(ctx, escapedSystem)
+	if err != nil {
+		if fatalInventoryError(err) {
+			return Inventory{}, err
+		}
+		markUnavailable(&result, "nics")
+	}
+	if len(result.Errors) == 0 {
+		result.Errors = nil
+	}
+	return result, nil
+}
+
+// Query fetches the fast system overview. Unlike Inventory, it does not walk
+// the storage and network collections, which can require many serial requests
+// on an iDRAC.
+func (c *Client) Query(ctx context.Context, systemID, managerID string) (Inventory, error) {
 	escapedSystem := url.PathEscape(systemID)
 	escapedManager := url.PathEscape(managerID)
 	result := Inventory{Errors: make(map[string]string)}
@@ -170,7 +208,7 @@ func (c *Client) Inventory(ctx context.Context, systemID, managerID string) (Inv
 		if fatalInventoryError(err) {
 			return Inventory{}, err
 		}
-		markUnavailable(&result, "system", "bios", "memory", "cpu")
+		markUnavailable(&result, "system", "bios", "memory", "cpu", "status")
 	} else {
 		result.System = SystemSummary{Manufacturer: system.Manufacturer, Model: system.Model}
 		result.BIOSVersion = system.BiosVersion
@@ -178,6 +216,12 @@ func (c *Client) Inventory(ctx context.Context, systemID, managerID string) (Inv
 		result.CPU = ProcessorSummary{
 			Count: system.ProcessorSummary.Count, Model: system.ProcessorSummary.Model,
 			Cores: system.ProcessorSummary.CoreCount, Threads: system.ProcessorSummary.LogicalProcessorCount,
+		}
+		result.Status = SystemStatus{
+			PowerState: system.PowerState,
+			BootProgress: BootProgress{
+				LastState: system.BootProgress.LastState, LastStateTime: system.BootProgress.LastStateTime,
+			},
 		}
 	}
 
@@ -197,21 +241,6 @@ func (c *Client) Inventory(ctx context.Context, systemID, managerID string) (Inv
 		}
 	}
 
-	var err error
-	result.RAIDControllers, err = c.raidControllers(ctx, escapedSystem)
-	if err != nil {
-		if fatalInventoryError(err) {
-			return Inventory{}, err
-		}
-		markUnavailable(&result, "raid_controllers")
-	}
-	result.NICs, err = c.nics(ctx, escapedSystem)
-	if err != nil {
-		if fatalInventoryError(err) {
-			return Inventory{}, err
-		}
-		markUnavailable(&result, "nics")
-	}
 	if len(result.Errors) == 0 {
 		result.Errors = nil
 	}

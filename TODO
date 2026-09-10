@@ -12,7 +12,7 @@
 
 3. [x] change "LARGE WARNING" to "WARNING"
 
-4. query is simply too slow.  Let's either make it incremental (so the system is displayed first and futher details as they arrive) or make separate command for query versus inventory.  Let's also add the "status" output to the query command.
+4. [x] query is simply too slow.  Let's either make it incremental (so the system is displayed first and futher details as they arrive) or make separate command for query versus inventory.  Let's also add the "status" output to the query command.
 
 5. Let's add the dell service tag to the query output: "Serial Number: ABC1234D"
 
@@ -34,3 +34,5 @@
 10.  add a factory reset command (that does the reset operation where the IP address and username/password are  retained, but all other settings revert to factory defaults.)
 
 11. add a github workflow to lint and build binaries for linux amd64 and MAC.
+
+12.   detect if the output is to a terminal and if so, print some kind of spinner output showing what is happening while the user is waiting for output.  This can be overwritten by the actual output once it arrives.:w

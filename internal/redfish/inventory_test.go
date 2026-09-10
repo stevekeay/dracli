@@ -65,6 +65,41 @@ func TestInventoryCollectsHardwareNICAndLLDPData(t *testing.T) {
 	}
 }
 
+func TestQueryUsesOnlySummaryResourcesAndIncludesSystemStatus(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		switch request.URL.Path {
+		case "/redfish/v1/Systems/System.Embedded.1":
+			return jsonResponse(http.StatusOK, `{"Manufacturer":"Dell","Model":"PowerEdge","PowerState":"On","BootProgress":{"LastState":"OSRunning","LastStateTime":"2026-09-10T07:00:00Z"}}`), nil
+		case "/redfish/v1/Managers/iDRAC.Embedded.1":
+			return jsonResponse(http.StatusOK, `{"Model":"iDRAC9","FirmwareVersion":"7.20","DateTime":"2026-09-10T08:00:00+01:00"}`), nil
+		default:
+			t.Fatalf("query fetched slow inventory resource %q", request.URL.Path)
+			return nil, nil
+		}
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Query(context.Background(), "System.Embedded.1", "iDRAC.Embedded.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if result.Status.PowerState != "On" || result.Status.BootProgress.LastState != "OSRunning" {
+		t.Fatalf("status = %#v", result.Status)
+	}
+	if result.RAIDControllers != nil || result.NICs != nil {
+		t.Fatalf("query unexpectedly populated detailed inventory: %#v", result)
+	}
+}
+
 func TestInventoryKeepsSuccessfulSectionsWhenStorageCannotBeDecoded(t *testing.T) {
 	t.Parallel()
 
