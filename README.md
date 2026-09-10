@@ -20,7 +20,7 @@ the certificate and hostname:
 /home/steve.keay/.asdf/shims/go build -o dracli ./cmd/dracli
 ```
 
-GitHub Actions checks formatting, runs `go vet` and the race-enabled test suite,
+GitHub Actions checks formatting, runs `golangci-lint` and the race-enabled test suite,
 then publishes Linux AMD64 and macOS AMD64/ARM64 binaries as workflow artifacts.
 
 ## Lifecycle Controller logs
