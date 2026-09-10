@@ -261,7 +261,11 @@ func fatalInventoryError(err error) bool {
 		return true
 	}
 	var httpErr *HTTPError
-	return errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden)
+	if errors.As(err, &httpErr) {
+		return true
+	}
+	var requestErr *url.Error
+	return errors.As(err, &requestErr)
 }
 
 func summarizeClock(value, localOffset string, localTime time.Time) (ClockSummary, error) {

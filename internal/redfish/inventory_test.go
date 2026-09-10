@@ -2,8 +2,10 @@ package redfish
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,6 +105,79 @@ func TestQueryUsesOnlySummaryResourcesAndIncludesSystemStatus(t *testing.T) {
 	}
 	if result.RAIDControllers != nil || result.NICs != nil {
 		t.Fatalf("query unexpectedly populated detailed inventory: %#v", result)
+	}
+}
+
+func TestQueryReturnsRequestAndHTTPFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		transport roundTripFunc
+		want      string
+	}{
+		{
+			name: "HTTP error",
+			transport: func(*http.Request) (*http.Response, error) {
+				return jsonResponse(http.StatusServiceUnavailable, `{"error":"temporarily unavailable"}`), nil
+			},
+			want: "Service Unavailable",
+		},
+		{
+			name: "connection error",
+			transport: func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("TLS certificate verification failed")
+			},
+			want: "TLS certificate verification failed",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, err := NewClient("https://bmc.example", "root", "secret", &http.Client{Transport: test.transport})
+			if err != nil {
+				t.Fatal(err)
+			}
+			inventory, err := client.Query(context.Background(), "System.Embedded.1", "iDRAC.Embedded.1")
+			if err == nil {
+				t.Fatalf("Query() error = nil, inventory = %#v", inventory)
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Query() error = %q, want it to contain %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestQueryKeepsDecodeFailureLocalToAffectedSections(t *testing.T) {
+	t.Parallel()
+
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/redfish/v1/Systems/System.Embedded.1":
+			return jsonResponse(http.StatusOK, `{`), nil
+		case "/redfish/v1/Managers/iDRAC.Embedded.1":
+			return jsonResponse(http.StatusOK, `{"Model":"iDRAC9","FirmwareVersion":"7.20","DateTime":"2026-09-10T08:00:00+01:00"}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected request %s", request.URL.Path)
+		}
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, err := client.Query(context.Background(), "System.Embedded.1", "iDRAC.Embedded.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventory.IDRAC.Version != "7.20" {
+		t.Fatalf("successful manager section was lost: %#v", inventory)
+	}
+	for _, section := range []string{"system", "serial_number", "bios", "memory", "cpu", "status"} {
+		if inventory.Errors[section] != UnableToParseRedfishResponse {
+			t.Errorf("%s error = %q, want parse marker", section, inventory.Errors[section])
+		}
 	}
 }
 

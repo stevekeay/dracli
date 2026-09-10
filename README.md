@@ -106,7 +106,8 @@ version comes from `FirmwareVersion`.
 The clock comparison accounts for RFC 3339 timezone offsets and prints a warning
 when drift exceeds 60 seconds. If one Redfish section cannot be decoded, it is marked
 `UNABLE TO PARSE REDFISH RESPONSE` while successfully decoded sections remain
-visible.
+visible. Connection, TLS, timeout, and HTTP errors instead stop the command and are
+reported as command errors.
 
 `status --monitor` prints the current power and boot-progress state, then polls
 every five seconds by default and prints only changes. JSON monitor output is
