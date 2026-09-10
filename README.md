@@ -20,6 +20,9 @@ the certificate and hostname:
 /home/steve.keay/.asdf/shims/go build -o dracli ./cmd/dracli
 ```
 
+GitHub Actions checks formatting, runs `go vet` and the race-enabled test suite,
+then publishes Linux AMD64 and macOS AMD64/ARM64 binaries as workflow artifacts.
+
 ## Lifecycle Controller logs
 
 By default, `dracli` derives the BMC password from `BMC_MASTER` using the same
