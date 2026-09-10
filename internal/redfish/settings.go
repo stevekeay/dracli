@@ -34,8 +34,10 @@ var biosSettingNames = []string{
 }
 
 type SettingsSelection struct {
-	Hostname   string         `json:"hostname,omitempty"`
-	Attributes map[string]any `json:"attributes"`
+	Hostname        string         `json:"hostname,omitempty"`
+	Attributes      map[string]any `json:"attributes"`
+	Order           []string       `json:"-"`
+	IncludeHostname bool           `json:"-"`
 }
 
 type attributesResource struct {
@@ -47,7 +49,7 @@ func (c *Client) DRACSettings(ctx context.Context, managerID string) (SettingsSe
 	var resource attributesResource
 	path := "/redfish/v1/Managers/" + escapedManager + "/Attributes"
 	if err := c.getPath(ctx, path, &resource); err != nil {
-		if !isNotFound(err) {
+		if !isUnsupported(err) {
 			return SettingsSelection{}, err
 		}
 		path = "/redfish/v1/Managers/" + escapedManager + "/Oem/Dell/DellAttributes/" + escapedManager
@@ -57,10 +59,15 @@ func (c *Client) DRACSettings(ctx context.Context, managerID string) (SettingsSe
 	}
 
 	hostname, err := c.managerHostname(ctx, managerID)
-	if err != nil && !isNotFound(err) {
+	if err != nil && !isUnsupported(err) {
 		return SettingsSelection{}, err
 	}
-	return SettingsSelection{Hostname: hostname, Attributes: selectAttributes(resource.Attributes, dracSettingNames)}, nil
+	return SettingsSelection{
+		Hostname:        hostname,
+		Attributes:      selectAttributes(resource.Attributes, dracSettingNames),
+		Order:           dracSettingNames,
+		IncludeHostname: true,
+	}, nil
 }
 
 func (c *Client) BIOSSettings(ctx context.Context, systemID string) (SettingsSelection, error) {
@@ -69,7 +76,7 @@ func (c *Client) BIOSSettings(ctx context.Context, systemID string) (SettingsSel
 	if err := c.getPath(ctx, path, &resource); err != nil {
 		return SettingsSelection{}, err
 	}
-	return SettingsSelection{Attributes: selectAttributes(resource.Attributes, biosSettingNames)}, nil
+	return SettingsSelection{Attributes: selectAttributes(resource.Attributes, biosSettingNames), Order: biosSettingNames}, nil
 }
 
 func (c *Client) managerHostname(ctx context.Context, managerID string) (string, error) {

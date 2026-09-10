@@ -38,6 +38,12 @@ type LogEntry struct {
 	Message string `json:"Message"`
 }
 
+type LogPage struct {
+	Number  int
+	Entries []json.RawMessage
+	More    bool
+}
+
 type collection struct {
 	Members    []json.RawMessage `json:"Members"`
 	NextLink   string            `json:"Members@odata.nextLink"`
@@ -65,42 +71,60 @@ func NewClient(baseURL, username, password string, httpClient *http.Client) (*Cl
 }
 
 func (c *Client) LifecycleLogs(ctx context.Context, managerID string) ([]json.RawMessage, error) {
+	var entries []json.RawMessage
+	err := c.LifecycleLogPages(ctx, managerID, func(page LogPage) (bool, error) {
+		entries = append(entries, page.Entries...)
+		return true, nil
+	})
+	return entries, err
+}
+
+// LifecycleLogPages visits each Lifecycle Controller log page until there are
+// no more pages or visit returns false. Pagination URLs remain constrained to
+// the iDRAC origin.
+func (c *Client) LifecycleLogPages(ctx context.Context, managerID string, visit func(LogPage) (bool, error)) error {
 	path := "/redfish/v1/Managers/" + url.PathEscape(managerID) + "/LogServices/Lclog/Entries"
 	pageURL := c.baseURL.ResolveReference(&url.URL{Path: path})
 	seen := make(map[string]struct{})
-	var entries []json.RawMessage
 
 	for page := 0; page < maxPages; page++ {
 		if _, exists := seen[pageURL.String()]; exists {
-			return nil, fmt.Errorf("Redfish pagination loop at %s", pageURL.Redacted())
+			return fmt.Errorf("Redfish pagination loop at %s", pageURL.Redacted())
 		}
 		seen[pageURL.String()] = struct{}{}
 
 		collection, err := c.getCollection(ctx, pageURL)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		entries = append(entries, collection.Members...)
 
 		next := collection.NextLink
 		if next == "" {
 			next = collection.LegacyNext
 		}
-		if next == "" {
-			return entries, nil
+		var nextURL *url.URL
+		if next != "" {
+			nextURL, err = url.Parse(next)
+			if err != nil {
+				return fmt.Errorf("parse Redfish next link: %w", err)
+			}
+			nextURL = pageURL.ResolveReference(nextURL)
+			if !sameOrigin(c.baseURL, nextURL) {
+				return fmt.Errorf("refusing cross-origin Redfish next link to %s", nextURL.Redacted())
+			}
 		}
 
-		nextURL, err := url.Parse(next)
+		proceed, err := visit(LogPage{Number: page + 1, Entries: collection.Members, More: nextURL != nil})
 		if err != nil {
-			return nil, fmt.Errorf("parse Redfish next link: %w", err)
+			return err
 		}
-		pageURL = pageURL.ResolveReference(nextURL)
-		if !sameOrigin(c.baseURL, pageURL) {
-			return nil, fmt.Errorf("refusing cross-origin Redfish next link to %s", pageURL.Redacted())
+		if nextURL == nil || !proceed {
+			return nil
 		}
+		pageURL = nextURL
 	}
 
-	return nil, fmt.Errorf("Redfish response exceeded %d pages", maxPages)
+	return fmt.Errorf("Redfish response exceeded %d pages", maxPages)
 }
 
 func (c *Client) getCollection(ctx context.Context, endpoint *url.URL) (collection, error) {

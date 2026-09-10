@@ -9,16 +9,31 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
+)
+
+const (
+	UnableToParseRedfishResponse = "UNABLE TO PARSE REDFISH RESPONSE"
+	SignificantClockDrift        = 60 * time.Second
 )
 
 type Inventory struct {
-	System          SystemSummary    `json:"system"`
-	IDRAC           FirmwareSummary  `json:"idrac"`
-	BIOSVersion     string           `json:"bios_version,omitempty"`
-	Memory          MemorySummary    `json:"memory"`
-	CPU             ProcessorSummary `json:"cpu"`
-	RAIDControllers []RAIDController `json:"raid_controllers"`
-	NICs            []NIC            `json:"nics"`
+	System          SystemSummary     `json:"system"`
+	IDRAC           FirmwareSummary   `json:"idrac"`
+	BIOSVersion     string            `json:"bios_version,omitempty"`
+	Memory          MemorySummary     `json:"memory"`
+	CPU             ProcessorSummary  `json:"cpu"`
+	RAIDControllers []RAIDController  `json:"raid_controllers"`
+	NICs            []NIC             `json:"nics"`
+	Clock           ClockSummary      `json:"clock"`
+	Errors          map[string]string `json:"errors,omitempty"`
+}
+
+type ClockSummary struct {
+	DRACTime     string `json:"drac_time,omitempty"`
+	LocalTime    string `json:"local_time,omitempty"`
+	DriftSeconds int64  `json:"drift_seconds"`
+	Significant  bool   `json:"significant"`
 }
 
 type SystemSummary struct {
@@ -87,8 +102,10 @@ type processorResource struct {
 }
 
 type managerResource struct {
-	Model           string `json:"Model"`
-	FirmwareVersion string `json:"FirmwareVersion"`
+	Model               string `json:"Model"`
+	FirmwareVersion     string `json:"FirmwareVersion"`
+	DateTime            string `json:"DateTime"`
+	DateTimeLocalOffset string `json:"DateTimeLocalOffset"`
 }
 
 type storageResource struct {
@@ -97,7 +114,7 @@ type storageResource struct {
 	Model              string               `json:"Model"`
 	FirmwareVersion    string               `json:"FirmwareVersion"`
 	StorageControllers []raidControllerData `json:"StorageControllers"`
-	Controllers        []raidControllerData `json:"Controllers"`
+	Controllers        json.RawMessage      `json:"Controllers"`
 }
 
 type raidControllerData struct {
@@ -146,38 +163,108 @@ type link struct {
 func (c *Client) Inventory(ctx context.Context, systemID, managerID string) (Inventory, error) {
 	escapedSystem := url.PathEscape(systemID)
 	escapedManager := url.PathEscape(managerID)
+	result := Inventory{Errors: make(map[string]string)}
+
 	var system systemResource
 	if err := c.getPath(ctx, "/redfish/v1/Systems/"+escapedSystem, &system); err != nil {
-		return Inventory{}, err
-	}
-	var manager managerResource
-	if err := c.getPath(ctx, "/redfish/v1/Managers/"+escapedManager, &manager); err != nil {
-		return Inventory{}, err
+		if fatalInventoryError(err) {
+			return Inventory{}, err
+		}
+		markUnavailable(&result, "system", "bios", "memory", "cpu")
+	} else {
+		result.System = SystemSummary{Manufacturer: system.Manufacturer, Model: system.Model}
+		result.BIOSVersion = system.BiosVersion
+		result.Memory = MemorySummary{TotalGiB: system.MemorySummary.TotalSystemMemoryGiB}
+		result.CPU = ProcessorSummary{
+			Count: system.ProcessorSummary.Count, Model: system.ProcessorSummary.Model,
+			Cores: system.ProcessorSummary.CoreCount, Threads: system.ProcessorSummary.LogicalProcessorCount,
+		}
 	}
 
-	result := Inventory{
-		System:      SystemSummary{Manufacturer: system.Manufacturer, Model: system.Model},
-		IDRAC:       FirmwareSummary{Model: manager.Model, Version: manager.FirmwareVersion},
-		BIOSVersion: system.BiosVersion,
-		Memory:      MemorySummary{TotalGiB: system.MemorySummary.TotalSystemMemoryGiB},
-		CPU: ProcessorSummary{
-			Count:   system.ProcessorSummary.Count,
-			Model:   system.ProcessorSummary.Model,
-			Cores:   system.ProcessorSummary.CoreCount,
-			Threads: system.ProcessorSummary.LogicalProcessorCount,
-		},
+	var manager managerResource
+	if err := c.getPath(ctx, "/redfish/v1/Managers/"+escapedManager, &manager); err != nil {
+		if fatalInventoryError(err) {
+			return Inventory{}, err
+		}
+		markUnavailable(&result, "idrac", "clock")
+	} else {
+		result.IDRAC = FirmwareSummary{Model: manager.Model, Version: manager.FirmwareVersion}
+		clock, err := summarizeClock(manager.DateTime, manager.DateTimeLocalOffset, time.Now())
+		if err != nil {
+			markUnavailable(&result, "clock")
+		} else {
+			result.Clock = clock
+		}
 	}
 
 	var err error
 	result.RAIDControllers, err = c.raidControllers(ctx, escapedSystem)
 	if err != nil {
-		return Inventory{}, err
+		if fatalInventoryError(err) {
+			return Inventory{}, err
+		}
+		markUnavailable(&result, "raid_controllers")
 	}
 	result.NICs, err = c.nics(ctx, escapedSystem)
 	if err != nil {
-		return Inventory{}, err
+		if fatalInventoryError(err) {
+			return Inventory{}, err
+		}
+		markUnavailable(&result, "nics")
+	}
+	if len(result.Errors) == 0 {
+		result.Errors = nil
 	}
 	return result, nil
+}
+
+func markUnavailable(result *Inventory, sections ...string) {
+	for _, section := range sections {
+		result.Errors[section] = UnableToParseRedfishResponse
+	}
+}
+
+func fatalInventoryError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var httpErr *HTTPError
+	return errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden)
+}
+
+func summarizeClock(value, localOffset string, localTime time.Time) (ClockSummary, error) {
+	dracTime, err := parseDRACDateTime(value, localOffset)
+	if err != nil {
+		return ClockSummary{}, err
+	}
+	drift := dracTime.Sub(localTime)
+	driftSeconds := int64(drift.Round(time.Second) / time.Second)
+	return ClockSummary{
+		DRACTime: value, LocalTime: localTime.Format(time.RFC3339), DriftSeconds: driftSeconds,
+		Significant: absDuration(drift) > SignificantClockDrift,
+	}, nil
+}
+
+func parseDRACDateTime(value, localOffset string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, errors.New("iDRAC did not report DateTime")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed, nil
+	}
+	if localOffset != "" {
+		if parsed, err := time.Parse("2006-01-02T15:04:05.999999999Z07:00", value+localOffset); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("parse iDRAC DateTime %q", value)
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func (c *Client) raidControllers(ctx context.Context, systemID string) ([]RAIDController, error) {
@@ -190,12 +277,26 @@ func (c *Client) raidControllers(ctx context.Context, systemID string) ([]RAIDCo
 	}
 
 	controllers := make([]RAIDController, 0)
+	var firstErr error
 	for _, member := range members {
 		var storage storageResource
 		if err := c.memberResource(ctx, member, &storage); err != nil {
-			return nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
-		items := append(storage.StorageControllers, storage.Controllers...)
+		items := append([]raidControllerData(nil), storage.StorageControllers...)
+		if len(items) == 0 {
+			linked, err := c.controllerData(ctx, storage.Controllers)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else {
+				items = append(items, linked...)
+			}
+		}
 		if len(items) == 0 && (storage.Model != "" || storage.Manufacturer != "") {
 			items = []raidControllerData{{
 				ID: storage.ID, Manufacturer: storage.Manufacturer,
@@ -214,7 +315,48 @@ func (c *Client) raidControllers(ctx context.Context, systemID string) ([]RAIDCo
 		}
 	}
 	sort.Slice(controllers, func(i, j int) bool { return controllers[i].ID < controllers[j].ID })
-	return controllers, nil
+	return controllers, firstErr
+}
+
+func (c *Client) controllerData(ctx context.Context, raw json.RawMessage) ([]raidControllerData, error) {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	if raw[0] == '[' {
+		var result []raidControllerData
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, fmt.Errorf("decode storage Controllers array: %w", err)
+		}
+		return result, nil
+	}
+	if raw[0] != '{' {
+		return nil, errors.New("decode storage Controllers: expected object or array")
+	}
+	var controllerLink link
+	if err := json.Unmarshal(raw, &controllerLink); err != nil {
+		return nil, fmt.Errorf("decode storage Controllers link: %w", err)
+	}
+	if controllerLink.ODataID == "" {
+		var item raidControllerData
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, fmt.Errorf("decode embedded storage Controller: %w", err)
+		}
+		return []raidControllerData{item}, nil
+	}
+	members, err := c.collectionMembers(ctx, controllerLink.ODataID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]raidControllerData, 0, len(members))
+	for _, member := range members {
+		var item raidControllerData
+		if err := c.memberResource(ctx, member, &item); err != nil {
+			return result, err
+		}
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 func (c *Client) nics(ctx context.Context, systemID string) ([]NIC, error) {
@@ -268,6 +410,7 @@ func (c *Client) nics(ctx context.Context, systemID string) ([]NIC, error) {
 		}
 		nics = append(nics, nic)
 	}
+	nics = collapseNICPartitions(nics)
 	sort.Slice(nics, func(i, j int) bool { return nics[i].ID < nics[j].ID })
 	return nics, nil
 }
@@ -279,7 +422,7 @@ type adapterWithPorts struct {
 
 func (c *Client) networkAdapters(ctx context.Context, systemID string) ([]adapterWithPorts, error) {
 	members, err := c.collectionMembers(ctx, "/redfish/v1/Systems/"+systemID+"/NetworkAdapters")
-	if isNotFound(err) {
+	if isUnsupported(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -299,7 +442,7 @@ func (c *Client) networkAdapters(ctx context.Context, systemID string) ([]adapte
 		}
 		if portPath != "" {
 			portMembers, err := c.collectionMembers(ctx, portPath)
-			if err != nil && !isNotFound(err) {
+			if err != nil && !isUnsupported(err) {
 				return nil, err
 			}
 			for _, portMember := range portMembers {
@@ -318,7 +461,7 @@ func (c *Client) networkAdapters(ctx context.Context, systemID string) ([]adapte
 func (c *Client) switchConnections(ctx context.Context, systemID string) ([]switchConnection, error) {
 	path := "/redfish/v1/Systems/" + systemID + "/NetworkPorts/Oem/Dell/DellSwitchConnections"
 	members, err := c.collectionMembers(ctx, path)
-	if isNotFound(err) {
+	if isUnsupported(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -392,6 +535,84 @@ func (c *Client) memberResource(ctx context.Context, raw json.RawMessage, target
 func isNotFound(err error) bool {
 	var httpErr *HTTPError
 	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
+}
+
+func isUnsupported(err error) bool {
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	return httpErr.StatusCode == http.StatusNotFound ||
+		httpErr.StatusCode == http.StatusMethodNotAllowed ||
+		httpErr.StatusCode == http.StatusNotImplemented
+}
+
+// collapseNICPartitions mirrors iDRAC's physical-interface view. When both
+// NIC.Slot.1-1 and its first partition NIC.Slot.1-1-1 are present, keep the
+// physical FQDD and use the partition to fill in live data that is absent from
+// the parent resource. Partition-only interfaces are retained.
+func collapseNICPartitions(nics []NIC) []NIC {
+	indexes := make(map[string]int, len(nics))
+	for index, nic := range nics {
+		indexes[nic.ID] = index
+	}
+
+	omit := make(map[int]struct{})
+	for index, child := range nics {
+		parentID, ok := parentNICID(child.ID)
+		if !ok {
+			continue
+		}
+		parentIndex, exists := indexes[parentID]
+		if !exists {
+			continue
+		}
+		mergeNIC(&nics[parentIndex], child)
+		omit[index] = struct{}{}
+	}
+
+	result := make([]NIC, 0, len(nics)-len(omit))
+	for index, nic := range nics {
+		if _, skip := omit[index]; !skip {
+			result = append(result, nic)
+		}
+	}
+	return result
+}
+
+func parentNICID(id string) (string, bool) {
+	dash := strings.LastIndexByte(id, '-')
+	if dash < 0 || dash == len(id)-1 {
+		return "", false
+	}
+	for _, character := range id[dash+1:] {
+		if character < '0' || character > '9' {
+			return "", false
+		}
+	}
+	return id[:dash], true
+}
+
+func mergeNIC(parent *NIC, child NIC) {
+	if parent.Manufacturer == "" {
+		parent.Manufacturer = child.Manufacturer
+	}
+	if parent.Model == "" {
+		parent.Model = child.Model
+	}
+	if parent.Description == "" {
+		parent.Description = child.Description
+	}
+	if child.Link != "" && (parent.Link == "" || strings.EqualFold(parent.Link, "NoLink")) {
+		parent.Link = child.Link
+	}
+	if parent.SpeedMbps == nil {
+		parent.SpeedMbps = child.SpeedMbps
+	}
+	parent.MACAddresses = uniqueStrings(append(parent.MACAddresses, child.MACAddresses...)...)
+	if parent.LLDP == nil {
+		parent.LLDP = child.LLDP
+	}
 }
 
 func bestAdapter(id string, adapters []adapterWithPorts) (adapterWithPorts, bool) {

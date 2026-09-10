@@ -1,10 +1,15 @@
 package command
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stevekeay/dracli/internal/redfish"
 )
 
 func TestWriteEntriesText(t *testing.T) {
@@ -26,7 +31,7 @@ func TestMissingMasterIsReported(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
-	exitCode := Run([]string{"lc-logs", "10.46.96.160"}, &stdout, &stderr, func(string) string { return "" })
+	exitCode := Run([]string{"logs", "10.46.96.160"}, &stdout, &stderr, func(string) string { return "" })
 	if exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1", exitCode)
 	}
@@ -42,7 +47,128 @@ func TestHelp(t *testing.T) {
 	if exitCode := Run([]string{"help"}, &stdout, &stderr, func(string) string { return "" }); exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "lc-logs") {
+	if !strings.Contains(stdout.String(), "Global options:") ||
+		!strings.Contains(stdout.String(), "settings bios") ||
+		!strings.Contains(stdout.String(), "Password precedence") {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestHelpFlagAliasesHelpCommand(t *testing.T) {
+	t.Parallel()
+
+	var helpOutput bytes.Buffer
+	if exitCode := Run([]string{"--help"}, &helpOutput, io.Discard, func(string) string { return "" }); exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	var commandOutput bytes.Buffer
+	if exitCode := Run([]string{"help"}, &commandOutput, io.Discard, func(string) string { return "" }); exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if helpOutput.String() != commandOutput.String() {
+		t.Fatal("--help and help produced different output")
+	}
+}
+
+func TestInsecureMayPrecedeCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "simple command", args: []string{"--insecure", "status", "10.46.96.160"}, want: []string{"status", "--insecure", "10.46.96.160"}},
+		{name: "settings subcommand", args: []string{"--insecure", "settings", "bios", "10.46.96.160"}, want: []string{"settings", "bios", "--insecure", "10.46.96.160"}},
+		{name: "TLS verification", args: []string{"--verify-tls", "query", "10.46.96.160"}, want: []string{"query", "--verify-tls", "10.46.96.160"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeGlobalArgs(test.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("normalizeGlobalArgs() = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+
+	var stderr bytes.Buffer
+	exitCode := Run([]string{"--insecure", "status", "10.46.96.160"}, io.Discard, &stderr, func(string) string { return "" })
+	if exitCode != 1 || !strings.Contains(stderr.String(), "BMC_MASTER must be set") {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+}
+
+func TestPromptForNextLogPage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{input: "\n", want: true},
+		{input: "anything\n", want: true},
+		{input: "Q\n", want: false},
+		{input: "", want: false},
+	}
+	for _, test := range tests {
+		var prompt bytes.Buffer
+		got := promptForNextLogPage(bufio.NewReader(strings.NewReader(test.input)), &prompt)
+		if got != test.want {
+			t.Errorf("input %q: got %v, want %v", test.input, got, test.want)
+		}
+		if !strings.Contains(prompt.String(), "next page") {
+			t.Errorf("input %q: prompt = %q", test.input, prompt.String())
+		}
+	}
+}
+
+func TestWriteInventoryReportsPartialFailureAndClockWarning(t *testing.T) {
+	t.Parallel()
+
+	inventory := redfish.Inventory{
+		System: redfish.SystemSummary{Manufacturer: "Dell", Model: "PowerEdge"},
+		Clock:  redfish.ClockSummary{DriftSeconds: -75, Significant: true},
+		Errors: map[string]string{"raid_controllers": redfish.UnableToParseRedfishResponse},
+	}
+	var output bytes.Buffer
+	if err := writeInventory(&output, inventory, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "System: Dell PowerEdge") ||
+		!strings.Contains(output.String(), "LARGE WARNING") ||
+		!strings.Contains(output.String(), "RAID controllers:\n  UNABLE TO PARSE REDFISH RESPONSE") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestTLSVerificationOverridesInsecureDefault(t *testing.T) {
+	t.Parallel()
+
+	if !skipTLSVerification(false, false) {
+		t.Fatal("default should skip TLS verification")
+	}
+	if skipTLSVerification(true, true) {
+		t.Fatal("--verify-tls should enable verification")
+	}
+}
+
+func TestWriteSettingsPreservesCuratedOrderAndReportsHostname(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	settings := redfish.SettingsSelection{
+		Attributes:      map[string]any{"second": nil, "first": "value"},
+		Order:           []string{"first", "second"},
+		IncludeHostname: true,
+	}
+	if err := writeSettings(&output, settings, "text"); err != nil {
+		t.Fatal(err)
+	}
+	want := "Hostname: unknown\nfirst: value\nsecond: not reported\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
 }

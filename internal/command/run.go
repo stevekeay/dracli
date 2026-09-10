@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -21,22 +22,89 @@ import (
 	"github.com/stevekeay/dracli/internal/redfish"
 )
 
-const usage = `Usage:
-  dracli <command> [options] <BMC IPv4 address>
+const usage = `dracli operates Dell iDRAC controllers through the Redfish API.
+
+Usage:
+  dracli [global options] <command> [command options] <BMC IPv4 address>
+  dracli --help
+
+Global options:
+  --verify-tls  Validate the BMC TLS certificate and hostname. Verification is
+                disabled by default. May also follow the command.
+  --insecure    Explicitly skip TLS verification (the default); retained for
+                compatibility and may also follow the command.
+  --help        Show this guide. The aliases -h, -help, and help also work.
 
 Commands:
-	  lc-logs    Fetch Lifecycle Controller log entries
-	  inventory  Query a concise hardware and firmware inventory
-	  query      Alias for inventory
-	  status     Query power and boot progress; optionally monitor changes
-	  settings   Show curated iDRAC or BIOS settings
+  logs
+      Fetch Lifecycle Controller log entries and print their creation time and
+      message. The first page is fetched by default. In an interactive terminal,
+      press Enter to fetch each additional page; use --all to fetch every page.
+
+  inventory (alias: query)
+      Show a brief hardware and firmware summary: server make/model, iDRAC and
+      BIOS versions, memory, CPU, RAID controllers, and NIC details. NIC output
+      includes FQDD/slot, make/model, MAC, link, speed, and LLDP when available.
+      The query also checks the iDRAC clock against local system time.
+
+  status
+      Show the current power state and boot progress with timestamps. Add
+      --monitor to poll every five seconds and print only state changes; use
+      --interval to select a different polling period.
+
+  settings drac
+      Show the curated iDRAC hostname, SNMP, Connection View, NTP, timezone,
+      and DNS settings.
+
+  settings bios
+      Show the curated HTTP boot, timezone, OS-to-BMC, IPMI, Secure Boot, and
+      PXE settings. Settings commands are read-only.
+
+Common command options (place these after the command):
+  --username NAME    BMC username; defaults to DRAC_USERNAME or root.
+  --password VALUE   Plaintext BMC password override.
+  --output FORMAT    Select text (default) or json.
+  --timeout DURATION HTTP request timeout; defaults to 30s.
+  --manager ID       Override the Redfish manager ID where applicable.
+  --system ID        Override the Redfish system ID where applicable.
+
+Credentials:
+  The username defaults to root. Password precedence is --password, then
+  DRAC_PASSWORD, then derivation from BMC_MASTER. BMC_MASTER is required only
+  when neither of the password overrides is supplied.
+
+Output:
+  Commands produce concise text by default. Use --output json after a command
+  for machine-readable output. Monitored JSON output is JSON Lines.
+
+Examples:
+  dracli status 10.46.96.160
+  dracli status --monitor 10.46.96.160
+  dracli query --output json 10.46.96.160
+  dracli logs --all 10.46.96.160
+  dracli --verify-tls settings bios 10.46.96.160
 
 Run "dracli <command> -help" for command options.
 `
 
 func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return run(args, nil, stdout, stderr, getenv, false)
+}
+
+// RunCLI enables terminal-only behavior such as interactive log pagination.
+func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
+	return run(args, stdin, stdout, stderr, getenv, isTerminal(stdin) && isTerminal(stdout))
+}
+
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, interactive bool) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, usage)
+		return 2
+	}
+	var err error
+	args, err = normalizeGlobalArgs(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "dracli: %v\n\n%s", err, usage)
 		return 2
 	}
 
@@ -44,8 +112,8 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	case "help", "-help", "--help", "-h":
 		_, _ = io.WriteString(stdout, usage)
 		return 0
-	case "lc-logs":
-		if err := runLCLogs(args[1:], stdout, stderr, getenv); err != nil {
+	case "logs", "lc-logs":
+		if err := runLogs(args[1:], stdin, stdout, stderr, getenv, interactive); err != nil {
 			fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
@@ -74,20 +142,56 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	}
 }
 
-func runLCLogs(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
-	flags := flag.NewFlagSet("lc-logs", flag.ContinueOnError)
+// normalizeGlobalArgs permits generic flags before the command while the
+// command FlagSet remains the single place where their values are parsed.
+func normalizeGlobalArgs(args []string) ([]string, error) {
+	prefix := make([]string, 0, 1)
+	for index, argument := range args {
+		switch {
+		case argument == "--help" || argument == "-help" || argument == "-h" || argument == "help":
+			return []string{"help"}, nil
+		case argument == "--insecure" || argument == "-insecure" ||
+			strings.HasPrefix(argument, "--insecure=") || strings.HasPrefix(argument, "-insecure=") ||
+			argument == "--verify-tls" || argument == "-verify-tls" ||
+			strings.HasPrefix(argument, "--verify-tls=") || strings.HasPrefix(argument, "-verify-tls="):
+			prefix = append(prefix, argument)
+		default:
+			if strings.HasPrefix(argument, "-") {
+				return nil, fmt.Errorf("unknown global option %q", argument)
+			}
+			normalized := make([]string, 0, len(args))
+			normalized = append(normalized, argument)
+			if argument == "settings" && index+1 < len(args) &&
+				(args[index+1] == "drac" || args[index+1] == "bios") {
+				normalized = append(normalized, args[index+1])
+				normalized = append(normalized, prefix...)
+				normalized = append(normalized, args[index+2:]...)
+				return normalized, nil
+			}
+			normalized = append(normalized, prefix...)
+			normalized = append(normalized, args[index+1:]...)
+			return normalized, nil
+		}
+	}
+	return nil, errors.New("a command is required")
+}
+
+func runLogs(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, interactive bool) error {
+	flags := flag.NewFlagSet("logs", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: dracli lc-logs [options] <BMC IPv4 address>")
+		fmt.Fprintln(stderr, "Usage: dracli logs [options] <BMC IPv4 address>")
 		fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
 	username := flags.String("username", envOrDefault(getenv, "DRAC_USERNAME", "root"), "BMC username")
-	insecure := flags.Bool("insecure", false, "skip TLS certificate verification")
+	insecure := flags.Bool("insecure", false, "explicitly skip TLS certificate verification (the default)")
+	verifyTLS := flags.Bool("verify-tls", false, "validate the BMC TLS certificate and hostname")
 	output := flags.String("output", "text", "output format: text or json")
 	manager := flags.String("manager", "iDRAC.Embedded.1", "Redfish manager identifier")
 	timeout := flags.Duration("timeout", 30*time.Second, "HTTP request timeout")
+	all := flags.Bool("all", false, "fetch every available log page without prompting")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -103,16 +207,63 @@ func runLCLogs(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		return fmt.Errorf("invalid output format %q: use text or json", *output)
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, *insecure, *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
 	if err != nil {
 		return err
 	}
 
-	entries, err := client.LifecycleLogs(context.Background(), *manager)
-	if err != nil {
-		return err
+	if *all {
+		entries, err := client.LifecycleLogs(context.Background(), *manager)
+		if err != nil {
+			return err
+		}
+		return writeEntries(stdout, entries, *output)
 	}
-	return writeEntries(stdout, entries, *output)
+
+	reader := bufio.NewReader(stdin)
+	return client.LifecycleLogPages(context.Background(), *manager, func(page redfish.LogPage) (bool, error) {
+		if err := writeEntries(stdout, page.Entries, *output); err != nil {
+			return false, err
+		}
+		if !page.More {
+			return false, nil
+		}
+		if !interactive || *output == "json" {
+			fmt.Fprintf(stderr, "dracli: page %d fetched; more log entries are available; add --all (for example: %s)\n", page.Number, allLogsExample(flags.Arg(0), *verifyTLS, *output))
+			return false, nil
+		}
+		return promptForNextLogPage(reader, stderr), nil
+	})
+}
+
+func promptForNextLogPage(reader *bufio.Reader, output io.Writer) bool {
+	fmt.Fprint(output, "More log entries are available; press Enter for the next page, or q then Enter to quit: ")
+	answer, err := reader.ReadString('\n')
+	if err != nil && len(answer) == 0 {
+		fmt.Fprintln(output)
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(answer), "q")
+}
+
+func allLogsExample(host string, verifyTLS bool, output string) string {
+	parts := []string{"dracli", "logs", "--all"}
+	if verifyTLS {
+		parts = append(parts, "--verify-tls")
+	}
+	if output != "text" {
+		parts = append(parts, "--output", output)
+	}
+	return strings.Join(append(parts, host), " ")
+}
+
+func isTerminal(value any) bool {
+	file, ok := value.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
@@ -125,7 +276,8 @@ func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) s
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
 	username := flags.String("username", envOrDefault(getenv, "DRAC_USERNAME", "root"), "BMC username")
-	insecure := flags.Bool("insecure", false, "skip TLS certificate verification")
+	insecure := flags.Bool("insecure", false, "explicitly skip TLS certificate verification (the default)")
+	verifyTLS := flags.Bool("verify-tls", false, "validate the BMC TLS certificate and hostname")
 	output := flags.String("output", "text", "output format: text or json")
 	manager := flags.String("manager", "iDRAC.Embedded.1", "Redfish manager identifier")
 	system := flags.String("system", "System.Embedded.1", "Redfish system identifier")
@@ -145,7 +297,7 @@ func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) s
 		return fmt.Errorf("invalid output format %q: use text or json", *output)
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, *insecure, *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
 	if err != nil {
 		return err
 	}
@@ -166,7 +318,8 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
 	username := flags.String("username", envOrDefault(getenv, "DRAC_USERNAME", "root"), "BMC username")
-	insecure := flags.Bool("insecure", false, "skip TLS certificate verification")
+	insecure := flags.Bool("insecure", false, "explicitly skip TLS certificate verification (the default)")
+	verifyTLS := flags.Bool("verify-tls", false, "validate the BMC TLS certificate and hostname")
 	output := flags.String("output", "text", "output format: text or json")
 	system := flags.String("system", "System.Embedded.1", "Redfish system identifier")
 	timeout := flags.Duration("timeout", 30*time.Second, "HTTP request timeout")
@@ -190,7 +343,7 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		return errors.New("interval must be greater than zero")
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, *insecure, *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
 	if err != nil {
 		return err
 	}
@@ -214,7 +367,7 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		select {
 		case <-ctx.Done():
 			return nil
-		case observedAt := <-ticker.C:
+		case <-ticker.C:
 			next, err := client.SystemStatus(ctx, *system)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -223,7 +376,7 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 				return err
 			}
 			if next != current {
-				if err := writeStatus(stdout, next, observedAt, *output, true); err != nil {
+				if err := writeStatus(stdout, next, time.Now(), *output, true); err != nil {
 					return err
 				}
 				current = next
@@ -245,7 +398,8 @@ func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) st
 	}
 	password := flags.String("password", "", "BMC password (otherwise DRAC_PASSWORD or derived using BMC_MASTER)")
 	username := flags.String("username", envOrDefault(getenv, "DRAC_USERNAME", "root"), "BMC username")
-	insecure := flags.Bool("insecure", false, "skip TLS certificate verification")
+	insecure := flags.Bool("insecure", false, "explicitly skip TLS certificate verification (the default)")
+	verifyTLS := flags.Bool("verify-tls", false, "validate the BMC TLS certificate and hostname")
 	output := flags.String("output", "text", "output format: text or json")
 	manager := flags.String("manager", "iDRAC.Embedded.1", "Redfish manager identifier")
 	system := flags.String("system", "System.Embedded.1", "Redfish system identifier")
@@ -265,7 +419,7 @@ func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) st
 		return fmt.Errorf("invalid output format %q: use text or json", *output)
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, *insecure, *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
 	if err != nil {
 		return err
 	}
@@ -297,6 +451,11 @@ func newRedfishClient(host, username, password string, insecure bool, timeout ti
 	return redfish.NewClient("https://"+host, username, resolvedPassword, httpClient)
 }
 
+func skipTLSVerification(insecure, verifyTLS bool) bool {
+	_ = insecure // retained as a compatibility flag; skipping is now the default
+	return !verifyTLS
+}
+
 func writeInventory(output io.Writer, inventory redfish.Inventory, format string) error {
 	if format == "json" {
 		encoder := json.NewEncoder(output)
@@ -308,14 +467,29 @@ func writeInventory(output io.Writer, inventory redfish.Inventory, format string
 	}
 
 	lines := []string{
-		fmt.Sprintf("System: %s", joinKnown(inventory.System.Manufacturer, inventory.System.Model)),
-		fmt.Sprintf("iDRAC: %s", joinKnown(inventory.IDRAC.Model, inventory.IDRAC.Version)),
-		fmt.Sprintf("BIOS: %s", known(inventory.BIOSVersion)),
-		fmt.Sprintf("Memory: %g GiB", inventory.Memory.TotalGiB),
-		fmt.Sprintf("CPU: %d x %s (%d cores, %d threads)", inventory.CPU.Count, known(inventory.CPU.Model), inventory.CPU.Cores, inventory.CPU.Threads),
-		"RAID controllers:",
+		inventoryLine(inventory, "system", "System", joinKnown(inventory.System.Manufacturer, inventory.System.Model)),
+		inventoryLine(inventory, "idrac", "iDRAC", joinKnown(inventory.IDRAC.Model, inventory.IDRAC.Version)),
+		inventoryLine(inventory, "bios", "BIOS", known(inventory.BIOSVersion)),
+		inventoryLine(inventory, "memory", "Memory", fmt.Sprintf("%g GiB", inventory.Memory.TotalGiB)),
+		inventoryLine(inventory, "cpu", "CPU", fmt.Sprintf("%d x %s (%d cores, %d threads)", inventory.CPU.Count, known(inventory.CPU.Model), inventory.CPU.Cores, inventory.CPU.Threads)),
 	}
-	if len(inventory.RAIDControllers) == 0 {
+	if message, failed := inventory.Errors["clock"]; failed {
+		lines = append(lines, "DRAC clock: "+message)
+	} else {
+		drift := inventory.Clock.DriftSeconds
+		if drift < 0 {
+			drift = -drift
+		}
+		if inventory.Clock.Significant {
+			lines = append(lines, fmt.Sprintf("*** LARGE WARNING: DRAC CLOCK DIFFERS FROM LOCAL SYSTEM TIME BY %d SECONDS ***", drift))
+		} else {
+			lines = append(lines, fmt.Sprintf("DRAC clock agrees with local system time within %d seconds", drift))
+		}
+	}
+	lines = append(lines, "RAID controllers:")
+	if message, failed := inventory.Errors["raid_controllers"]; failed {
+		lines = append(lines, "  "+message)
+	} else if len(inventory.RAIDControllers) == 0 {
 		lines = append(lines, "  none reported")
 	}
 	for _, controller := range inventory.RAIDControllers {
@@ -326,7 +500,9 @@ func writeInventory(output io.Writer, inventory redfish.Inventory, format string
 		lines = append(lines, fmt.Sprintf("  %s: %s", known(controller.ID), known(details)))
 	}
 	lines = append(lines, "NICs:")
-	if len(inventory.NICs) == 0 {
+	if message, failed := inventory.Errors["nics"]; failed {
+		lines = append(lines, "  "+message)
+	} else if len(inventory.NICs) == 0 {
 		lines = append(lines, "  none reported")
 	}
 	for _, nic := range inventory.NICs {
@@ -349,6 +525,13 @@ func writeInventory(output io.Writer, inventory redfish.Inventory, format string
 		return fmt.Errorf("write text output: %w", err)
 	}
 	return nil
+}
+
+func inventoryLine(inventory redfish.Inventory, section, label, value string) string {
+	if message, failed := inventory.Errors[section]; failed {
+		return label + ": " + message
+	}
+	return label + ": " + value
 }
 
 type observedStatus struct {
@@ -393,16 +576,19 @@ func writeSettings(output io.Writer, settings redfish.SettingsSelection, format 
 		}
 		return nil
 	}
-	if settings.Hostname != "" {
-		if _, err := fmt.Fprintf(output, "Hostname: %s\n", settings.Hostname); err != nil {
+	if settings.IncludeHostname {
+		if _, err := fmt.Fprintf(output, "Hostname: %s\n", known(settings.Hostname)); err != nil {
 			return fmt.Errorf("write text output: %w", err)
 		}
 	}
-	keys := make([]string, 0, len(settings.Attributes))
-	for key := range settings.Attributes {
-		keys = append(keys, key)
+	keys := settings.Order
+	if len(keys) == 0 {
+		keys = make([]string, 0, len(settings.Attributes))
+		for key := range settings.Attributes {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
 	}
-	sort.Strings(keys)
 	for _, key := range keys {
 		value := settings.Attributes[key]
 		if value == nil {
