@@ -8,8 +8,8 @@ Use the generic `--verify-tls` option before or after any command to validate
 the certificate and hostname:
 
 ```sh
-./dracli --verify-tls status 10.46.96.160
-./dracli status --verify-tls 10.46.96.160
+./dracli --verify-tls status x.x.x.x
+./dracli status --verify-tls x.x.x.x
 ```
 
 `--insecure` remains accepted as an explicit spelling of the default.
@@ -27,7 +27,7 @@ PBKDF2 scheme as `understack_workflows.bmc_password_standard`:
 
 ```sh
 export BMC_MASTER='...'
-./dracli logs 10.46.96.160
+./dracli logs x.x.x.x
 ```
 
 The credential precedence is:
@@ -39,10 +39,10 @@ The credential precedence is:
 For example:
 
 ```sh
-./dracli logs --password 'plain-text-password' 10.46.96.160
-DRAC_PASSWORD='plain-text-password' ./dracli logs 10.46.96.160
-./dracli logs --output json 10.46.96.160
-./dracli logs --all 10.46.96.160
+./dracli logs --password 'plain-text-password' x.x.x.x
+DRAC_PASSWORD='plain-text-password' ./dracli logs x.x.x.x
+./dracli logs --output json x.x.x.x
+./dracli logs --all x.x.x.x
 ```
 
 `logs` fetches one page by default. At a terminal it offers to fetch the next
@@ -58,13 +58,13 @@ the process list; `DRAC_PASSWORD` is preferable for ad-hoc use.
 ## Inventory and system state
 
 ```sh
-./dracli query 10.46.96.160
-./dracli query --output json 10.46.96.160
-./dracli 10.46.96.160 # query is the default command
+./dracli query x.x.x.x
+./dracli query --output json x.x.x.x
+./dracli x.x.x.x # query is the default command
 
-./dracli status 10.46.96.160
-./dracli status --monitor 10.46.96.160
-./dracli status --monitor --interval 10s 10.46.96.160
+./dracli status x.x.x.x
+./dracli status --monitor x.x.x.x
+./dracli status --monitor --interval 10s x.x.x.x
 ```
 
 `query` is the fast overview: it makes only the system and manager requests and
@@ -91,10 +91,10 @@ newline-delimited JSON, one observation per changed state.
 ## Settings
 
 ```sh
-./dracli settings 10.46.96.160
-./dracli settings drac 10.46.96.160
-./dracli settings drac --all 10.46.96.160
-./dracli settings bios --name SecureBoot --name TimeZone 10.46.96.160
+./dracli settings x.x.x.x
+./dracli settings drac x.x.x.x
+./dracli settings drac --all x.x.x.x
+./dracli settings bios --name SecureBoot --name TimeZone x.x.x.x
 ```
 
 With no namespace, `settings` reports the curated iDRAC and BIOS attributes.
@@ -107,8 +107,8 @@ needed. Values are parsed as JSON when possible, so numbers and booleans keep
 their types; ordinary unquoted values remain strings.
 
 ```sh
-./dracli settings bios --set SecureBoot=Disabled 10.46.96.160
-./dracli settings drac --set SNMP.1.AlertPort=161 10.46.96.160
+./dracli settings bios --set SecureBoot=Disabled x.x.x.x
+./dracli settings drac --set SNMP.1.AlertPort=161 x.x.x.x
 ```
 
 Redfish may stage BIOS changes until the next reboot. The command reports that

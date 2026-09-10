@@ -8,7 +8,7 @@
 
     The default should remain as displaying the curated list of settings
 
-    if bios or drac is not specified, `dracli settings 10.46.96.160` should report both bios and drac settings.
+    if bios or drac is not specified, `dracli settings x.x.x.x` should report both bios and drac settings.
 
 3. [x] change "LARGE WARNING" to "WARNING"
 
@@ -27,7 +27,7 @@
     BIOS: 2.8.2
     iDRAC: 16G Monolithic 7.30.10.50
 
-8. replace the example IP address with x.x.x.x
+8. [x] replace the example IP address with x.x.x.x
 
 9. Add a command to view the "job queue".  Add another command to clear it.
 

@@ -79,13 +79,13 @@ Output:
   for machine-readable output. Monitored JSON output is JSON Lines.
 
 Examples:
-  dracli status 10.46.96.160
-  dracli status --monitor 10.46.96.160
-  dracli query --output json 10.46.96.160
-  dracli logs --all 10.46.96.160
-  dracli settings --name SecureBoot --name TimeZone 10.46.96.160
-  dracli settings bios --set SecureBoot=Disabled 10.46.96.160
-  dracli --verify-tls settings bios 10.46.96.160
+  dracli status x.x.x.x
+  dracli status --monitor x.x.x.x
+  dracli query --output json x.x.x.x
+  dracli logs --all x.x.x.x
+  dracli settings --name SecureBoot --name TimeZone x.x.x.x
+  dracli settings bios --set SecureBoot=Disabled x.x.x.x
+  dracli --verify-tls settings bios x.x.x.x
 
 Run "dracli <command> -help" for command options.
 `
