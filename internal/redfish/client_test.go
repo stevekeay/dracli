@@ -3,10 +3,13 @@ package redfish
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -99,5 +102,124 @@ func TestLifecycleLogPagesCanStopAfterFirstPage(t *testing.T) {
 	}
 	if requests != 1 || got.Number != 1 || !got.More || len(got.Entries) != 1 {
 		t.Fatalf("requests = %d, page = %#v", requests, got)
+	}
+}
+
+func TestGetRetriesServerErrorAfterThirtySeconds(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return jsonResponse(http.StatusServiceUnavailable, `{"error":"temporarily unavailable"}`), nil
+		}
+		return jsonResponse(http.StatusOK, `{"PowerState":"On"}`), nil
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var waited time.Duration
+	var notified time.Duration
+	client.SetRetryNotifier(func(delay time.Duration) {
+		notified = delay
+	})
+	client.wait = func(_ context.Context, delay time.Duration) error {
+		waited = delay
+		return nil
+	}
+
+	status, err := client.SystemStatus(context.Background(), "System.Embedded.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if waited != 30*time.Second {
+		t.Fatalf("retry delay = %s, want 30s", waited)
+	}
+	if notified != 30*time.Second {
+		t.Fatalf("notified delay = %s, want 30s", notified)
+	}
+	if status.PowerState != "On" {
+		t.Fatalf("power state = %q, want On", status.PowerState)
+	}
+}
+
+func TestGetDoesNotRetryClientError(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return jsonResponse(http.StatusNotFound, `{"error":"not found"}`), nil
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.wait = func(context.Context, time.Duration) error {
+		t.Fatal("wait called for a client error")
+		return nil
+	}
+
+	_, err = client.SystemStatus(context.Background(), "System.Embedded.1")
+	if err == nil {
+		t.Fatal("SystemStatus() succeeded, want an error")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("error = %v, want HTTP 404 error", err)
+	}
+}
+
+func TestGetStopsAfterOneServerErrorRetry(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return jsonResponse(http.StatusServiceUnavailable, `{"attempt":`+strconv.Itoa(requests)+`}`), nil
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.wait = func(context.Context, time.Duration) error { return nil }
+
+	_, err = client.SystemStatus(context.Background(), "System.Embedded.1")
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("error = %v, want HTTP 503 error", err)
+	}
+	if httpErr.Body != `{"attempt":2}` {
+		t.Fatalf("error body = %q, want final response body", httpErr.Body)
+	}
+}
+
+func TestGetCancelsServerErrorBackoff(t *testing.T) {
+	t.Parallel()
+
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusInternalServerError, `{}`), nil
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = client.SystemStatus(ctx, "System.Embedded.1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context cancellation", err)
 	}
 }

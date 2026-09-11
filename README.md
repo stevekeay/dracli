@@ -111,7 +111,9 @@ reported as command errors.
 
 `status --monitor` prints the current power and boot-progress state, then polls
 every five seconds by default and prints only changes. JSON monitor output is
-newline-delimited JSON, one observation per changed state.
+newline-delimited JSON, one observation per changed state. Read requests that
+receive a 5xx response are retried once after 30 seconds; 4xx responses are not
+retried. When a terminal progress spinner is active, it displays the retry delay.
 
 ## Job queue
 

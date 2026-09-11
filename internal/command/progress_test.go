@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProgressDescription(t *testing.T) {
@@ -44,5 +45,18 @@ func TestProgressStopsBeforeWritingCommandOutput(t *testing.T) {
 	}
 	if !strings.Contains(got, "\r\x1b[2Kresult\n") {
 		t.Fatalf("spinner was not cleared before command output: %q", got)
+	}
+}
+
+func TestProgressShowsServerRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	var terminal bytes.Buffer
+	progress := newTerminalProgress(&terminal, "Waiting...")
+	progress.Retrying(30 * time.Second)
+	progress.Stop()
+
+	if !strings.Contains(terminal.String(), "iDRAC unavailable; retrying in 30s...") {
+		t.Fatalf("retry notice missing from spinner output: %q", terminal.String())
 	}
 }

@@ -273,7 +273,7 @@ func runLogs(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv fu
 		return fmt.Errorf("invalid output format %q: use text or json", *output)
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv, stdout)
 	if err != nil {
 		return err
 	}
@@ -367,7 +367,7 @@ func runInventory(args []string, stdout, stderr io.Writer, getenv func(string) s
 		return fmt.Errorf("invalid output format %q: use text or json", *output)
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv, stdout)
 	if err != nil {
 		return err
 	}
@@ -421,7 +421,7 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		return errors.New("interval must be greater than zero")
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv, stdout)
 	if err != nil {
 		return err
 	}
@@ -432,7 +432,7 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	if err != nil {
 		return err
 	}
-	if err := writeStatus(stdout, current, time.Now(), *output, *monitor); err != nil {
+	if err := writeStatus(stdout, current, time.Now(), *output, *monitor, false); err != nil {
 		return err
 	}
 	if !*monitor {
@@ -454,7 +454,7 @@ func runStatus(args []string, stdout, stderr io.Writer, getenv func(string) stri
 				return err
 			}
 			if next != current {
-				if err := writeStatus(stdout, next, time.Now(), *output, true); err != nil {
+				if err := writeStatus(stdout, next, time.Now(), *output, true, true); err != nil {
 					return err
 				}
 				current = next
@@ -495,7 +495,7 @@ func runJobs(args []string, stdout, stderr io.Writer, getenv func(string) string
 	if *output != "text" && *output != "json" {
 		return fmt.Errorf("invalid output format %q: use text or json", *output)
 	}
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv, stdout)
 	if err != nil {
 		return err
 	}
@@ -550,7 +550,7 @@ func runFactoryReset(args []string, stdout, stderr io.Writer, getenv func(string
 		return errors.New("refusing to reset iDRAC settings without --yes")
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv, stdout)
 	if err != nil {
 		return err
 	}
@@ -622,7 +622,7 @@ func runSettings(args []string, stdout, stderr io.Writer, getenv func(string) st
 		return errors.New("--set requires an explicit settings namespace: drac or bios")
 	}
 
-	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv)
+	client, err := newRedfishClient(flags.Arg(0), *username, *password, skipTLSVerification(*insecure, *verifyTLS), *timeout, getenv, stdout)
 	if err != nil {
 		return err
 	}
@@ -708,7 +708,7 @@ func parseSettingsAssignments(assignments []string) (map[string]any, error) {
 	return values, nil
 }
 
-func newRedfishClient(host, username, password string, insecure bool, timeout time.Duration, getenv func(string) string) (*redfish.Client, error) {
+func newRedfishClient(host, username, password string, insecure bool, timeout time.Duration, getenv func(string) string, progressOutput io.Writer) (*redfish.Client, error) {
 	ip := net.ParseIP(host)
 	if ip == nil || ip.To4() == nil {
 		return nil, fmt.Errorf("need an IPv4 address, not %q", host)
@@ -721,7 +721,14 @@ func newRedfishClient(host, username, password string, insecure bool, timeout ti
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: insecure}
 	httpClient := &http.Client{Transport: transport, Timeout: timeout}
-	return redfish.NewClient("https://"+host, username, resolvedPassword, httpClient)
+	client, err := redfish.NewClient("https://"+host, username, resolvedPassword, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	if progress, ok := progressOutput.(interface{ Retrying(time.Duration) }); ok {
+		client.SetRetryNotifier(progress.Retrying)
+	}
+	return client, nil
 }
 
 func skipTLSVerification(insecure, verifyTLS bool) bool {
@@ -838,7 +845,7 @@ type observedStatus struct {
 	BootProgress redfish.BootProgress `json:"boot_progress"`
 }
 
-func writeStatus(output io.Writer, status redfish.SystemStatus, observedAt time.Time, format string, monitoring bool) error {
+func writeStatus(output io.Writer, status redfish.SystemStatus, observedAt time.Time, format string, monitoring, hasHistory bool) error {
 	observation := observedStatus{
 		ObservedAt:   observedAt.UTC().Format(time.RFC3339),
 		PowerState:   status.PowerState,
@@ -855,11 +862,11 @@ func writeStatus(output io.Writer, status redfish.SystemStatus, observedAt time.
 		return nil
 	}
 
-	bootTime := ""
-	if status.BootProgress.LastStateTime != "" {
-		bootTime = " boot_time=" + status.BootProgress.LastStateTime
+	since := ""
+	if !hasHistory && status.BootProgress.LastStateTime != "" {
+		since = " since=" + status.BootProgress.LastStateTime
 	}
-	if _, err := fmt.Fprintf(output, "%s power=%s boot=%s%s\n", observation.ObservedAt, known(status.PowerState), known(status.BootProgress.LastState), bootTime); err != nil {
+	if _, err := fmt.Fprintf(output, "%s power=%s boot=%s%s\n", observation.ObservedAt, known(status.PowerState), known(status.BootProgress.LastState), since); err != nil {
 		return fmt.Errorf("write text output: %w", err)
 	}
 	return nil

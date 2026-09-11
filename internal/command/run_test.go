@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stevekeay/dracli/internal/redfish"
 )
@@ -25,6 +26,35 @@ func TestWriteEntriesText(t *testing.T) {
 	}
 	if want := "2026-09-10T07:00:00Z Configuration job completed\n"; output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestWriteStatusShowsSinceOnlyWithoutHistory(t *testing.T) {
+	t.Parallel()
+
+	status := redfish.SystemStatus{
+		PowerState: "On",
+		BootProgress: redfish.BootProgress{
+			LastState:     "OSRunning",
+			LastStateTime: "2026-09-10T07:00:00Z",
+		},
+	}
+	observedAt := time.Date(2026, time.September, 11, 8, 30, 0, 0, time.UTC)
+
+	var initial bytes.Buffer
+	if err := writeStatus(&initial, status, observedAt, "text", true, false); err != nil {
+		t.Fatal(err)
+	}
+	if want := "2026-09-11T08:30:00Z power=On boot=OSRunning since=2026-09-10T07:00:00Z\n"; initial.String() != want {
+		t.Fatalf("initial output = %q, want %q", initial.String(), want)
+	}
+
+	var changed bytes.Buffer
+	if err := writeStatus(&changed, status, observedAt, "text", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if want := "2026-09-11T08:30:00Z power=On boot=OSRunning\n"; changed.String() != want {
+		t.Fatalf("changed output = %q, want %q", changed.String(), want)
 	}
 }
 

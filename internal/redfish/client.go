@@ -9,15 +9,28 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
-const maxPages = 1_000
+const (
+	maxPages              = 1_000
+	serverErrorRetries    = 1
+	serverErrorRetryDelay = 30 * time.Second
+)
 
 type Client struct {
 	baseURL  *url.URL
 	username string
 	password string
 	http     *http.Client
+	wait     func(context.Context, time.Duration) error
+	onRetry  func(time.Duration)
+}
+
+// SetRetryNotifier sets a callback invoked before waiting to retry a failed
+// read request. A nil callback disables notifications.
+func (c *Client) SetRetryNotifier(notify func(time.Duration)) {
+	c.onRetry = notify
 }
 
 type HTTPError struct {
@@ -68,7 +81,13 @@ func NewClient(baseURL, username, password string, httpClient *http.Client) (*Cl
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{baseURL: parsed, username: username, password: password, http: httpClient}, nil
+	return &Client{
+		baseURL:  parsed,
+		username: username,
+		password: password,
+		http:     httpClient,
+		wait:     waitForContext,
+	}, nil
 }
 
 func (c *Client) LifecycleLogs(ctx context.Context, managerID string) ([]json.RawMessage, error) {
@@ -149,34 +168,58 @@ func (c *Client) getPath(ctx context.Context, path string, target any) error {
 }
 
 func (c *Client) get(ctx context.Context, endpoint *url.URL, target any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return fmt.Errorf("create Redfish request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.SetBasicAuth(c.username, c.password)
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		if err != nil {
+			return fmt.Errorf("create Redfish request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.SetBasicAuth(c.username, c.password)
 
-	response, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("request %s: %w", endpoint.Redacted(), err)
-	}
-	defer func() { _ = response.Body.Close() }()
+		response, err := c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("request %s: %w", endpoint.Redacted(), err)
+		}
 
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			decodeErr := json.NewDecoder(response.Body).Decode(target)
+			_ = response.Body.Close()
+			if decodeErr != nil {
+				return fmt.Errorf("decode response from %s: %w", endpoint.Redacted(), decodeErr)
+			}
+			return nil
+		}
+
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
-		return &HTTPError{
+		_ = response.Body.Close()
+		httpErr := &HTTPError{
 			URL:        endpoint.Redacted(),
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
 			Body:       string(body),
 		}
-	}
 
-	decoder := json.NewDecoder(response.Body)
-	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode response from %s: %w", endpoint.Redacted(), err)
+		if response.StatusCode < 500 || response.StatusCode >= 600 || attempt >= serverErrorRetries {
+			return httpErr
+		}
+		if c.onRetry != nil {
+			c.onRetry(serverErrorRetryDelay)
+		}
+		if err := c.wait(ctx, serverErrorRetryDelay); err != nil {
+			return fmt.Errorf("retry request %s: %w", endpoint.Redacted(), err)
+		}
 	}
-	return nil
+}
+
+func waitForContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *Client) patchPath(ctx context.Context, path string, value any) error {

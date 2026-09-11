@@ -138,6 +138,7 @@ func TestQueryReturnsRequestAndHTTPFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			client.wait = func(context.Context, time.Duration) error { return nil }
 			inventory, err := client.Query(context.Background(), "System.Embedded.1", "iDRAC.Embedded.1")
 			if err == nil {
 				t.Fatalf("Query() error = nil, inventory = %#v", inventory)
