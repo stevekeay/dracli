@@ -41,7 +41,7 @@ _dracli()
         prev="${COMP_WORDS[COMP_CWORD-1]}"
     fi
 
-    commands="completion logs sel-logs query inventory status jobs clear-jobs factory-reset settings help"
+    commands="completion logs password query inventory status jobs clear-jobs factory-reset settings help"
     global_options="--verify-tls --help -help -h"
     common_options="--username --password --verify-tls --output --timeout --help -help -h"
 
@@ -50,7 +50,7 @@ _dracli()
     for (( index=1; index<COMP_CWORD; index++ )); do
         word="${COMP_WORDS[index]}"
         case "$word" in
-            completion|logs|sel-logs|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
+            completion|logs|password|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
                 command="$word"
                 command_index=$index
                 break
@@ -103,14 +103,22 @@ _dracli()
         return
     fi
 
+    if [[ "$command" == "logs" ]] && (( COMP_CWORD == command_index + 1 )) && [[ "$cur" != -* ]]; then
+        COMPREPLY=( $(compgen -W "system lc" -- "$cur") )
+        return
+    fi
+
     if [[ "$command" == "settings" ]] && (( COMP_CWORD == command_index + 1 )) && [[ "$cur" != -* ]]; then
         COMPREPLY=( $(compgen -W "drac bios" -- "$cur") )
         return
     fi
 
     case "$command" in
-        logs|sel-logs)
+        logs)
             options="$common_options --manager --all"
+            ;;
+        password)
+            options="--password --help -help -h"
             ;;
         query|inventory)
             options="$common_options --manager --system"
@@ -153,8 +161,8 @@ _dracli()
 
     commands=(
         'completion:Generate a shell completion script'
-        'logs:Fetch Lifecycle Controller log entries'
-        'sel-logs:Fetch System Event Log entries'
+        'logs:Fetch system and Lifecycle Controller log entries'
+        'password:Print the resolved iDRAC password'
         'query:Show a quick system summary'
         'inventory:Show system RAID and NIC inventory'
         'status:Show power state and boot progress'
@@ -186,7 +194,7 @@ _dracli()
     for (( index=2; index<CURRENT; index++ )); do
         word="${words[index]}"
         case "$word" in
-            completion|logs|sel-logs|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
+            completion|logs|password|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
                 command="$word"
                 command_index=$index
                 break
@@ -236,17 +244,30 @@ _dracli()
         return
     fi
 
+    if [[ "$command" == "logs" ]] && (( CURRENT == command_index + 1 )) && [[ "$cur" != -* ]]; then
+        _values 'log type' system lc
+        return
+    fi
+
     if [[ "$command" == "settings" ]] && (( CURRENT == command_index + 1 )) && [[ "$cur" != -* ]]; then
         _values 'settings namespace' drac bios
         return
     fi
 
     case "$command" in
-        logs|sel-logs)
+        logs)
             options=(
                 "${common_options[@]}"
                 '--manager:Redfish manager identifier'
                 '--all:Fetch every available log page'
+            )
+            ;;
+        password)
+            options=(
+                '--password:Plaintext iDRAC password override'
+                '--help:Show command help'
+                '-help:Show command help'
+                '-h:Show command help'
             )
             ;;
         query|inventory)

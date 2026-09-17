@@ -128,9 +128,15 @@ func progressDescription(args []string) string {
 	}
 	switch command {
 	case "logs":
-		return "Fetching Lifecycle Controller logs..."
-	case "sel-logs":
-		return "Fetching System Event Log..."
+		if len(normalized) > 1 {
+			switch normalized[1] {
+			case "system":
+				return "Fetching System Event Log..."
+			case "lc":
+				return "Fetching Lifecycle Controller logs..."
+			}
+		}
+		return "Fetching system and Lifecycle Controller logs..."
 	case "query":
 		return "Querying system summary..."
 	case "inventory":

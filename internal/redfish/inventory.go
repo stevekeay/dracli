@@ -61,10 +61,26 @@ type ProcessorSummary struct {
 }
 
 type RAIDController struct {
-	ID           string `json:"id,omitempty"`
-	Manufacturer string `json:"manufacturer,omitempty"`
-	Model        string `json:"model,omitempty"`
-	Firmware     string `json:"firmware,omitempty"`
+	ID           string  `json:"id,omitempty"`
+	Manufacturer string  `json:"manufacturer,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	Firmware     string  `json:"firmware,omitempty"`
+	Drives       []Drive `json:"drives"`
+}
+
+type Drive struct {
+	ID               string `json:"id,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Manufacturer     string `json:"manufacturer,omitempty"`
+	Model            string `json:"model,omitempty"`
+	SerialNumber     string `json:"serial_number,omitempty"`
+	Firmware         string `json:"firmware,omitempty"`
+	CapacityBytes    int64  `json:"capacity_bytes,omitempty"`
+	MediaType        string `json:"media_type,omitempty"`
+	Protocol         string `json:"protocol,omitempty"`
+	RotationSpeedRPM int    `json:"rotation_speed_rpm,omitempty"`
+	Health           string `json:"health,omitempty"`
+	State            string `json:"state,omitempty"`
 }
 
 type NIC struct {
@@ -125,6 +141,7 @@ type storageResource struct {
 	FirmwareVersion    string               `json:"FirmwareVersion"`
 	StorageControllers []raidControllerData `json:"StorageControllers"`
 	Controllers        json.RawMessage      `json:"Controllers"`
+	Drives             json.RawMessage      `json:"Drives"`
 }
 
 type raidControllerData struct {
@@ -133,6 +150,23 @@ type raidControllerData struct {
 	Manufacturer    string `json:"Manufacturer"`
 	Model           string `json:"Model"`
 	FirmwareVersion string `json:"FirmwareVersion"`
+}
+
+type driveResource struct {
+	ID               string `json:"Id"`
+	Name             string `json:"Name"`
+	Manufacturer     string `json:"Manufacturer"`
+	Model            string `json:"Model"`
+	SerialNumber     string `json:"SerialNumber"`
+	Revision         string `json:"Revision"`
+	CapacityBytes    int64  `json:"CapacityBytes"`
+	MediaType        string `json:"MediaType"`
+	Protocol         string `json:"Protocol"`
+	RotationSpeedRPM int    `json:"RotationSpeedRPM"`
+	Status           struct {
+		Health string `json:"Health"`
+		State  string `json:"State"`
+	} `json:"Status"`
 }
 
 type ethernetResource struct {
@@ -325,6 +359,10 @@ func (c *Client) raidControllers(ctx context.Context, systemID string) ([]RAIDCo
 			}
 			continue
 		}
+		drives, driveErr := c.driveData(ctx, storage.Drives)
+		if driveErr != nil && firstErr == nil {
+			firstErr = driveErr
+		}
 		items := append([]raidControllerData(nil), storage.StorageControllers...)
 		if len(items) == 0 {
 			linked, err := c.controllerData(ctx, storage.Controllers)
@@ -336,7 +374,7 @@ func (c *Client) raidControllers(ctx context.Context, systemID string) ([]RAIDCo
 				items = append(items, linked...)
 			}
 		}
-		if len(items) == 0 && (storage.Model != "" || storage.Manufacturer != "") {
+		if len(items) == 0 && (storage.Model != "" || storage.Manufacturer != "" || storage.ID != "" || len(drives) > 0) {
 			items = []raidControllerData{{
 				ID: storage.ID, Manufacturer: storage.Manufacturer,
 				Model: storage.Model, FirmwareVersion: storage.FirmwareVersion,
@@ -350,11 +388,59 @@ func (c *Client) raidControllers(ctx context.Context, systemID string) ([]RAIDCo
 			controllers = append(controllers, RAIDController{
 				ID: id, Manufacturer: item.Manufacturer,
 				Model: item.Model, Firmware: item.FirmwareVersion,
+				Drives: append([]Drive{}, drives...),
 			})
 		}
 	}
 	sort.Slice(controllers, func(i, j int) bool { return controllers[i].ID < controllers[j].ID })
 	return controllers, firstErr
+}
+
+func (c *Client) driveData(ctx context.Context, raw json.RawMessage) ([]Drive, error) {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" {
+		return []Drive{}, nil
+	}
+
+	var members []json.RawMessage
+	switch raw[0] {
+	case '[':
+		if err := json.Unmarshal(raw, &members); err != nil {
+			return nil, fmt.Errorf("decode storage Drives array: %w", err)
+		}
+	case '{':
+		var driveLink link
+		if err := json.Unmarshal(raw, &driveLink); err != nil {
+			return nil, fmt.Errorf("decode storage Drives link: %w", err)
+		}
+		if driveLink.ODataID == "" {
+			members = []json.RawMessage{raw}
+		} else {
+			var err error
+			members, err = c.collectionMembers(ctx, driveLink.ODataID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, errors.New("decode storage Drives: expected object or array")
+	}
+
+	drives := make([]Drive, 0, len(members))
+	for _, member := range members {
+		var resource driveResource
+		if err := c.memberResource(ctx, member, &resource); err != nil {
+			return drives, err
+		}
+		drives = append(drives, Drive{
+			ID: resource.ID, Name: resource.Name, Manufacturer: resource.Manufacturer,
+			Model: resource.Model, SerialNumber: resource.SerialNumber, Firmware: resource.Revision,
+			CapacityBytes: resource.CapacityBytes, MediaType: resource.MediaType, Protocol: resource.Protocol,
+			RotationSpeedRPM: resource.RotationSpeedRPM, Health: resource.Status.Health, State: resource.Status.State,
+		})
+	}
+	sort.Slice(drives, func(i, j int) bool { return drives[i].ID < drives[j].ID })
+	return drives, nil
 }
 
 func (c *Client) controllerData(ctx context.Context, raw json.RawMessage) ([]raidControllerData, error) {

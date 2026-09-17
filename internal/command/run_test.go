@@ -3,6 +3,7 @@ package command
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -13,6 +14,34 @@ import (
 
 	"github.com/stevekeay/dracli/internal/redfish"
 )
+
+type recordingLogClient struct {
+	calls  []string
+	system []json.RawMessage
+	lc     []json.RawMessage
+}
+
+func (client *recordingLogClient) LifecycleLogs(context.Context, string) ([]json.RawMessage, error) {
+	client.calls = append(client.calls, "lc-all")
+	return client.lc, nil
+}
+
+func (client *recordingLogClient) SystemEventLogs(context.Context, string) ([]json.RawMessage, error) {
+	client.calls = append(client.calls, "system-all")
+	return client.system, nil
+}
+
+func (client *recordingLogClient) LifecycleLogPages(_ context.Context, _ string, visit func(redfish.LogPage) (bool, error)) error {
+	client.calls = append(client.calls, "lc-pages")
+	_, err := visit(redfish.LogPage{Number: 1, Entries: client.lc})
+	return err
+}
+
+func (client *recordingLogClient) SystemEventLogPages(_ context.Context, _ string, visit func(redfish.LogPage) (bool, error)) error {
+	client.calls = append(client.calls, "system-pages")
+	_, err := visit(redfish.LogPage{Number: 1, Entries: client.system})
+	return err
+}
 
 func TestWriteEntriesText(t *testing.T) {
 	t.Parallel()
@@ -26,6 +55,49 @@ func TestWriteEntriesText(t *testing.T) {
 	}
 	if want := "2026-09-10T07:00:00Z Configuration job completed\n"; output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestCombinedLogsFetchesCompleteSystemLogBeforePagedLifecycleLog(t *testing.T) {
+	t.Parallel()
+
+	client := &recordingLogClient{
+		system: []json.RawMessage{json.RawMessage(`{"Created":"system-time","Message":"system event"}`)},
+		lc:     []json.RawMessage{json.RawMessage(`{"Created":"lc-time","Message":"lifecycle event"}`)},
+	}
+	var stdout, stderr bytes.Buffer
+	err := runCombinedLogs(client, "10.46.96.160", commonFlags{manager: "iDRAC.Embedded.1", output: "text"}, false, strings.NewReader(""), &stdout, &stderr, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(client.calls, []string{"system-all", "lc-pages"}) {
+		t.Fatalf("calls = %#v", client.calls)
+	}
+	want := "System Event Log:\nsystem-time system event\n\nLifecycle Controller Log:\nlc-time lifecycle event\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestCombinedLogJSONUsesNamedArrays(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if err := writeCombinedLogEntries(&output, nil, []json.RawMessage{json.RawMessage(`{"Message":"lifecycle event"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		System []json.RawMessage `json:"system"`
+		LC     []json.RawMessage `json:"lc"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.System == nil || len(result.System) != 0 || len(result.LC) != 1 {
+		t.Fatalf("combined logs = %#v", result)
 	}
 }
 
@@ -71,11 +143,38 @@ func TestMissingMasterIsReported(t *testing.T) {
 	}
 }
 
+func TestPasswordPrintsResolvedPlaintextOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		args   []string
+		env    map[string]string
+		output string
+	}{
+		{name: "explicit", args: []string{"password", "--password", "from-flag", "10.3.2.30"}, output: "from-flag\n"},
+		{name: "environment", args: []string{"password", "10.3.2.30"}, env: map[string]string{"DRAC_PASSWORD": "from-env"}, output: "from-env\n"},
+		{name: "derived", args: []string{"password", "10.3.2.30"}, env: map[string]string{"BMC_MASTER": "ultra-secret string"}, output: "Vbyf7AFhiY2phtD1vcF0\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exitCode := Run(test.args, &stdout, &stderr, func(key string) string { return test.env[key] })
+			if exitCode != 0 || stderr.Len() != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+			if stdout.String() != test.output {
+				t.Fatalf("stdout = %q, want %q", stdout.String(), test.output)
+			}
+		})
+	}
+}
+
 func TestSystemEventLogsCommandIsRecognized(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
-	exitCode := Run([]string{"sel-logs", "10.46.96.160"}, &stdout, &stderr, func(string) string { return "" })
+	exitCode := Run([]string{"logs", "system", "10.46.96.160"}, &stdout, &stderr, func(string) string { return "" })
 	if exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1", exitCode)
 	}
@@ -87,14 +186,14 @@ func TestSystemEventLogsCommandIsRecognized(t *testing.T) {
 func TestLogCommandHelp(t *testing.T) {
 	t.Parallel()
 
-	for _, command := range []string{"logs", "sel-logs"} {
+	for _, args := range [][]string{{"logs", "--help"}, {"logs", "system", "--help"}, {"logs", "lc", "--help"}} {
 		var stdout, stderr bytes.Buffer
-		exitCode := Run([]string{command, "--help"}, &stdout, &stderr, func(string) string { return "" })
+		exitCode := Run(args, &stdout, &stderr, func(string) string { return "" })
 		if exitCode != 0 {
-			t.Errorf("%s: exit code = %d, stderr = %q", command, exitCode, stderr.String())
+			t.Errorf("%v: exit code = %d, stderr = %q", args, exitCode, stderr.String())
 		}
-		if !strings.Contains(stdout.String(), "Usage: dracli "+command) {
-			t.Errorf("%s: stdout = %q", command, stdout.String())
+		if !strings.Contains(stdout.String(), "Usage: dracli logs [system|lc]") {
+			t.Errorf("%v: stdout = %q", args, stdout.String())
 		}
 	}
 }
@@ -108,7 +207,8 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Global options:") ||
 		!strings.Contains(stdout.String(), "settings bios") ||
-		!strings.Contains(stdout.String(), "sel-logs") ||
+		!strings.Contains(stdout.String(), "logs system") ||
+		!strings.Contains(stdout.String(), "password") ||
 		!strings.Contains(stdout.String(), "Password precedence") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
@@ -141,8 +241,9 @@ func TestCompletionScripts(t *testing.T) {
 			shell: "bash",
 			want: []string{
 				"complete -F _dracli dracli",
-				"completion logs sel-logs query inventory status jobs clear-jobs factory-reset settings help",
+				"completion logs password query inventory status jobs clear-jobs factory-reset settings help",
 				"--manager --system --all --name --set",
+				"system lc",
 				"drac bios",
 				"text json",
 			},
@@ -154,6 +255,7 @@ func TestCompletionScripts(t *testing.T) {
 				"compdef _dracli dracli",
 				"'factory-reset:Reset iDRAC settings to factory defaults'",
 				"'--set:Set NAME=VALUE (repeatable)'",
+				"'log type' system lc",
 				"'settings namespace' drac bios",
 				"'output format' text json",
 			},
@@ -177,6 +279,9 @@ func TestCompletionScripts(t *testing.T) {
 			}
 			if strings.Contains(stdout.String(), "--insecure") {
 				t.Error("completion output advertises removed --insecure option")
+			}
+			if strings.Contains(stdout.String(), "sel-logs") {
+				t.Error("completion output still contains removed sel-logs command")
 			}
 		})
 	}
@@ -223,6 +328,7 @@ func TestVerifyTLSMayPrecedeCommand(t *testing.T) {
 	}{
 		{name: "simple command", args: []string{"--verify-tls", "status", "10.46.96.160"}, want: []string{"status", "--verify-tls", "10.46.96.160"}},
 		{name: "settings subcommand", args: []string{"--verify-tls", "settings", "bios", "10.46.96.160"}, want: []string{"settings", "bios", "--verify-tls", "10.46.96.160"}},
+		{name: "logs selector", args: []string{"--verify-tls", "logs", "system", "10.46.96.160"}, want: []string{"logs", "system", "--verify-tls", "10.46.96.160"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -283,8 +389,8 @@ func TestPromptForNextLogPage(t *testing.T) {
 func TestAllLogsExampleUsesSelectedCommand(t *testing.T) {
 	t.Parallel()
 
-	got := allLogsExample("sel-logs", "10.46.96.160", true, "json")
-	want := "dracli sel-logs --all --verify-tls --output json 10.46.96.160"
+	got := allLogsExample("lc", "10.46.96.160", true, "json")
+	want := "dracli logs lc --all --verify-tls --output json 10.46.96.160"
 	if got != want {
 		t.Fatalf("allLogsExample() = %q, want %q", got, want)
 	}
@@ -306,6 +412,29 @@ func TestWriteInventoryReportsPartialFailureAndClockWarning(t *testing.T) {
 		!strings.Contains(output.String(), "*** WARNING:") ||
 		!strings.Contains(output.String(), "RAID controllers:\n  UNABLE TO PARSE REDFISH RESPONSE") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestWriteInventoryNestsDisksUnderController(t *testing.T) {
+	t.Parallel()
+
+	inventory := redfish.Inventory{
+		RAIDControllers: []redfish.RAIDController{{
+			ID: "RAID.Slot.6-1", Manufacturer: "Dell", Model: "PERC H755", Firmware: "52.21",
+			Drives: []redfish.Drive{{
+				ID: "Disk.Bay.0", Manufacturer: "SAMSUNG", Model: "MZ7LH1T9",
+				SerialNumber: "S123", Firmware: "D5MU", CapacityBytes: 1920383410176,
+				MediaType: "SSD", Protocol: "SATA", Health: "OK", State: "Enabled",
+			}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := writeInventory(&output, inventory, "text"); err != nil {
+		t.Fatal(err)
+	}
+	want := "  RAID.Slot.6-1: Dell PERC H755 firmware 52.21\n    disks:\n      Disk.Bay.0: SAMSUNG MZ7LH1T9; 1.75 TiB; SSD; SATA; serial S123; firmware D5MU; status OK Enabled"
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("output does not contain controller disk tree %q:\n%s", want, output.String())
 	}
 }
 

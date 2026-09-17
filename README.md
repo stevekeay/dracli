@@ -65,14 +65,17 @@ For example:
 DRAC_PASSWORD='plain-text-password' ./dracli logs x.x.x.x
 ./dracli logs --output json x.x.x.x
 ./dracli logs --all x.x.x.x
-./dracli sel-logs --all x.x.x.x
+./dracli logs system --all x.x.x.x
+./dracli logs lc --all x.x.x.x
 ```
 
-`logs` reads the Lifecycle Controller log; `sel-logs` reads the System Event
-Log (SEL). Both commands fetch one page by default. At a terminal they offer to
-fetch the next page; when output is redirected they stop after page one and
-print an example showing how to add `--all`. JSON output also requires `--all`
-for multi-page results so the command emits one valid JSON array.
+`logs system` reads the System Event Log (SEL), while `logs lc` reads the
+Lifecycle Controller log. With no selector, `logs` fetches the complete system
+log first without prompting, then reads the Lifecycle Controller log. A selected
+log fetches one page by default. At a terminal a selected log offers to fetch
+each next page; when redirected it stops after page one and prints an example
+showing how to add `--all`. JSON output is one array for a selected log or an
+object with `system` and `lc` arrays when both are requested.
 
 The default username is `root`; override it with `--username` or
 `DRAC_USERNAME`. TLS certificates are only verified when `--verify-tls` is supplied.
@@ -94,8 +97,10 @@ the process list; `DRAC_PASSWORD` is preferable for ad-hoc use.
 `query` is the fast overview: it makes only the system and manager requests and
 reports the Dell service tag, server and iDRAC models, firmware, BIOS, memory,
 CPU, current power and boot-progress status, and clock agreement. `inventory`
-adds the slower RAID and NIC collection traversal. NIC output includes make,
-model, slot, MAC addresses,
+adds the slower RAID, physical-disk, and NIC collection traversal. Physical
+disks are grouped beneath the storage controller to which Redfish associates
+them and include available identity, capacity, media, protocol, firmware, and
+health details. NIC output includes make, model, slot, MAC addresses,
 link and speed when supplied by Redfish, plus Dell Connection View LLDP switch
 and port data when enabled by the iDRAC.
 
@@ -114,6 +119,17 @@ every five seconds by default and prints only changes. JSON monitor output is
 newline-delimited JSON, one observation per changed state. Read requests that
 receive a 5xx response are retried once after 30 seconds; 4xx responses are not
 retried. When a terminal progress spinner is active, it displays the retry delay.
+
+## Password resolution
+
+```sh
+./dracli password x.x.x.x
+```
+
+`password` applies the normal credential precedence (`--password`,
+`DRAC_PASSWORD`, then `BMC_MASTER` derivation) and writes only the resolved
+plaintext password plus a newline to standard output. Treat redirected or
+captured output as sensitive.
 
 ## Job queue
 

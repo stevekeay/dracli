@@ -20,7 +20,9 @@ func TestInventoryCollectsHardwareNICAndLLDPData(t *testing.T) {
 			"ProcessorSummary":{"Count":1,"Model":"AMD EPYC 9124","CoreCount":16,"LogicalProcessorCount":32}}`,
 		"/redfish/v1/Managers/iDRAC.Embedded.1":                 `{"Model":"iDRAC9","FirmwareVersion":"7.00.60.00","DateTime":"2026-09-10T08:00:00+01:00"}`,
 		"/redfish/v1/Systems/System.Embedded.1/Storage":         `{"Members":[{"@odata.id":"/storage/RAID.Slot.6-1"}]}`,
-		"/storage/RAID.Slot.6-1":                                `{"Controllers":{"@odata.id":"/storage/RAID.Slot.6-1/Controllers"},"StorageControllers":[{"MemberId":"RAID.Slot.6-1","Manufacturer":"Dell","Model":"PERC H755","FirmwareVersion":"52.21"}]}`,
+		"/storage/RAID.Slot.6-1":                                `{"Controllers":{"@odata.id":"/storage/RAID.Slot.6-1/Controllers"},"StorageControllers":[{"MemberId":"RAID.Slot.6-1","Manufacturer":"Dell","Model":"PERC H755","FirmwareVersion":"52.21"}],"Drives":[{"@odata.id":"/drives/Disk.Bay.0"},{"@odata.id":"/drives/Disk.Bay.1"}]}`,
+		"/drives/Disk.Bay.0":                                    `{"Id":"Disk.Bay.0","Name":"Physical Disk 0","Manufacturer":"SAMSUNG","Model":"MZ7LH1T9","SerialNumber":"S123","Revision":"D5MU","CapacityBytes":1920383410176,"MediaType":"SSD","Protocol":"SATA","Status":{"Health":"OK","State":"Enabled"}}`,
+		"/drives/Disk.Bay.1":                                    `{"Id":"Disk.Bay.1","Name":"Physical Disk 1","Manufacturer":"SEAGATE","Model":"ST1200MM","SerialNumber":"S456","Revision":"LS0A","CapacityBytes":1200243695616,"MediaType":"HDD","Protocol":"SAS","RotationSpeedRPM":10000,"Status":{"Health":"Warning","State":"Enabled"}}`,
 		"/redfish/v1/Systems/System.Embedded.1/NetworkAdapters": `{"Members":[{"@odata.id":"/adapters/NIC.Slot.1"}]}`,
 		"/adapters/NIC.Slot.1":                                  `{"Id":"NIC.Slot.1","Manufacturer":"Broadcom","Model":"57414","NetworkPorts":{"@odata.id":"/adapters/NIC.Slot.1/ports"}}`,
 		"/adapters/NIC.Slot.1/ports":                            `{"Members":[{"@odata.id":"/ports/NIC.Slot.1-1"}]}`,
@@ -51,6 +53,11 @@ func TestInventoryCollectsHardwareNICAndLLDPData(t *testing.T) {
 	}
 	if len(inventory.RAIDControllers) != 1 || inventory.RAIDControllers[0].Model != "PERC H755" {
 		t.Fatalf("unexpected RAID controllers: %#v", inventory.RAIDControllers)
+	}
+	if drives := inventory.RAIDControllers[0].Drives; len(drives) != 2 ||
+		drives[0].ID != "Disk.Bay.0" || drives[0].CapacityBytes != 1920383410176 ||
+		drives[1].RotationSpeedRPM != 10000 || drives[1].Health != "Warning" {
+		t.Fatalf("unexpected drives: %#v", drives)
 	}
 	if len(inventory.NICs) != 1 {
 		t.Fatalf("got %d NICs, want 1", len(inventory.NICs))
@@ -244,6 +251,32 @@ func TestControllerDataFollowsModernControllersLink(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Model != "PERC H965i Front" {
 		t.Fatalf("controllers = %#v", items)
+	}
+}
+
+func TestDriveDataFollowsDriveCollectionLink(t *testing.T) {
+	t.Parallel()
+
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/drives":
+			return jsonResponse(http.StatusOK, `{"Members":[{"@odata.id":"/drives/0"}]}`), nil
+		case "/drives/0":
+			return jsonResponse(http.StatusOK, `{"Id":"Disk.Direct.0","Model":"NVMe PE8010","CapacityBytes":3200631791616,"MediaType":"SSD","Protocol":"NVMe","Status":{"Health":"OK","State":"Enabled"}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected request %s", request.URL.Path)
+		}
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drives, err := client.driveData(context.Background(), []byte(`{"@odata.id":"/drives"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(drives) != 1 || drives[0].ID != "Disk.Direct.0" || drives[0].Protocol != "NVMe" || drives[0].Health != "OK" {
+		t.Fatalf("drives = %#v", drives)
 	}
 }
 

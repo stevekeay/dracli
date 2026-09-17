@@ -39,14 +39,13 @@ Commands:
       from your shell configuration to complete commands, options, and known
       option values.
 
-  logs
-      Fetch Lifecycle Controller log entries and print their creation time and
-      message. The first page is fetched by default. In an interactive terminal,
-      press Enter to fetch each additional page; use --all to fetch every page.
+  logs [system|lc]
+      Fetch the System Event Log, Lifecycle Controller log, or both. With no
+      selector, the complete system log is shown first, followed by the paged
+      Lifecycle Controller log. Use --all to fetch every lifecycle page.
 
-  sel-logs
-      Fetch System Event Log entries. Pagination and output options work in the
-      same way as for the Lifecycle Controller logs command.
+  password
+      Resolve the iDRAC password and print it in plaintext to standard output.
 
   query
       Quickly show system, firmware, memory, CPU, power/boot status, and the
@@ -54,8 +53,9 @@ Commands:
       supplied.
 
   inventory
-      Show the query summary plus RAID controllers and NIC details. NIC output
-      includes FQDD/slot, make/model, MAC, link, speed, and LLDP when available.
+      Show the query summary plus RAID controllers, attached disks, and NIC
+      details. NIC output includes FQDD/slot, make/model, MAC, link, speed, and
+      LLDP when available.
 
   status
       Show the current power state and boot progress with timestamps. Add
@@ -105,8 +105,10 @@ Examples:
   dracli status x.x.x.x
   dracli status --monitor x.x.x.x
   dracli query --output json x.x.x.x
-  dracli logs --all x.x.x.x
-  dracli sel-logs --all x.x.x.x
+  dracli logs x.x.x.x
+  dracli logs system x.x.x.x
+  dracli logs lc --all x.x.x.x
+  dracli password x.x.x.x
   dracli clear-jobs --yes x.x.x.x
   dracli factory-reset --yes x.x.x.x
   dracli settings --name SecureBoot --name TimeZone x.x.x.x
@@ -160,13 +162,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		}
 		return 0
 	case "logs":
-		if err := runLogs("logs", false, args[1:], stdin, stdout, stderr, getenv, interactive); err != nil {
+		if err := runLogs(args[1:], stdin, stdout, stderr, getenv, interactive); err != nil {
 			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
 		return 0
-	case "sel-logs":
-		if err := runLogs("sel-logs", true, args[1:], stdin, stdout, stderr, getenv, interactive); err != nil {
+	case "password":
+		if err := runPassword(args[1:], stdout, getenv); err != nil {
 			_, _ = fmt.Fprintf(stderr, "dracli: %v\n", err)
 			return 1
 		}
@@ -236,8 +238,8 @@ func normalizeGlobalArgs(args []string) ([]string, error) {
 			}
 			normalized := make([]string, 0, len(args))
 			normalized = append(normalized, argument)
-			if argument == "settings" && index+1 < len(args) &&
-				(args[index+1] == "idrac" || args[index+1] == "bios") {
+			if index+1 < len(args) && ((argument == "settings" && (args[index+1] == "idrac" || args[index+1] == "bios")) ||
+				(argument == "logs" && (args[index+1] == "system" || args[index+1] == "lc"))) {
 				normalized = append(normalized, args[index+1])
 				normalized = append(normalized, prefix...)
 				normalized = append(normalized, args[index+2:]...)
@@ -251,8 +253,13 @@ func normalizeGlobalArgs(args []string) ([]string, error) {
 	return nil, errors.New("a command is required")
 }
 
-func runLogs(commandName string, systemEvent bool, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, interactive bool) error {
-	flags := newFlagSet(commandName, stdout, fmt.Sprintf("Usage: dracli %s [options] <iDRAC IPv4 address>", commandName))
+func runLogs(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, interactive bool) error {
+	selection := ""
+	if len(args) > 0 && (args[0] == "system" || args[0] == "lc") {
+		selection = args[0]
+		args = args[1:]
+	}
+	flags := newFlagSet("logs", stdout, "Usage: dracli logs [system|lc] [options] <iDRAC IPv4 address>")
 	var opts commonFlags
 	addCommonFlags(flags, getenv, &opts, true, false)
 	all := flags.Bool("all", false, "fetch every available log page without prompting")
@@ -268,8 +275,68 @@ func runLogs(commandName string, systemEvent bool, args []string, stdin io.Reade
 		return err
 	}
 
-	if *all {
+	if selection == "" {
+		return runCombinedLogs(client, flags.Arg(0), opts, *all, stdin, stdout, stderr, interactive)
+	}
+	return runSelectedLogs(client, selection, flags.Arg(0), opts, *all, stdin, stdout, stderr, interactive)
+}
+
+type logClient interface {
+	LifecycleLogs(context.Context, string) ([]json.RawMessage, error)
+	SystemEventLogs(context.Context, string) ([]json.RawMessage, error)
+	LifecycleLogPages(context.Context, string, func(redfish.LogPage) (bool, error)) error
+	SystemEventLogPages(context.Context, string, func(redfish.LogPage) (bool, error)) error
+}
+
+func runCombinedLogs(client logClient, host string, opts commonFlags, all bool, stdin io.Reader, stdout, stderr io.Writer, interactive bool) error {
+	systemEntries, err := client.SystemEventLogs(context.Background(), opts.manager)
+	if err != nil {
+		return err
+	}
+	if opts.output == "json" {
+		lifecycleEntries, more, err := lifecycleLogEntries(client, opts.manager, all)
+		if err != nil {
+			return err
+		}
+		if more {
+			printMoreLogsWarning(stderr, 1, allLogsExample("lc", host, opts.verifyTLS, opts.output))
+		}
+		return writeCombinedLogEntries(stdout, systemEntries, lifecycleEntries)
+	}
+	if _, err := fmt.Fprintln(stdout, "System Event Log:"); err != nil {
+		return fmt.Errorf("write text output: %w", err)
+	}
+	if err := writeEntries(stdout, systemEntries, opts.output); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(stdout, "\nLifecycle Controller Log:"); err != nil {
+		return fmt.Errorf("write text output: %w", err)
+	}
+	return pageSelectedLogs(client, "lc", host, opts, all, stdin, stdout, stderr, interactive)
+}
+
+func runSelectedLogs(client logClient, selection, host string, opts commonFlags, all bool, stdin io.Reader, stdout, stderr io.Writer, interactive bool) error {
+	if all {
 		var entries []json.RawMessage
+		var err error
+		if selection == "system" {
+			entries, err = client.SystemEventLogs(context.Background(), opts.manager)
+		} else {
+			entries, err = client.LifecycleLogs(context.Background(), opts.manager)
+		}
+		if err != nil {
+			return err
+		}
+		return writeEntries(stdout, entries, opts.output)
+	}
+	return pageSelectedLogs(client, selection, host, opts, false, stdin, stdout, stderr, interactive)
+}
+
+func pageSelectedLogs(client logClient, selection, host string, opts commonFlags, all bool, stdin io.Reader, stdout, stderr io.Writer, interactive bool) error {
+	systemEvent := selection == "system"
+	if all {
+		var entries []json.RawMessage
+		var err error
 		if systemEvent {
 			entries, err = client.SystemEventLogs(context.Background(), opts.manager)
 		} else {
@@ -290,7 +357,7 @@ func runLogs(commandName string, systemEvent bool, args []string, stdin io.Reade
 			return false, nil
 		}
 		if !interactive || opts.output == "json" {
-			_, _ = fmt.Fprintf(stderr, "dracli: page %d fetched; more log entries are available; add --all (for example: %s)\n", page.Number, allLogsExample(commandName, flags.Arg(0), opts.verifyTLS, opts.output))
+			printMoreLogsWarning(stderr, page.Number, allLogsExample(selection, host, opts.verifyTLS, opts.output))
 			return false, nil
 		}
 		return promptForNextLogPage(reader, stderr), nil
@@ -299,6 +366,25 @@ func runLogs(commandName string, systemEvent bool, args []string, stdin io.Reade
 		return client.SystemEventLogPages(context.Background(), opts.manager, visit)
 	}
 	return client.LifecycleLogPages(context.Background(), opts.manager, visit)
+}
+
+func lifecycleLogEntries(client logClient, manager string, all bool) ([]json.RawMessage, bool, error) {
+	if all {
+		entries, err := client.LifecycleLogs(context.Background(), manager)
+		return entries, false, err
+	}
+	var entries []json.RawMessage
+	more := false
+	err := client.LifecycleLogPages(context.Background(), manager, func(page redfish.LogPage) (bool, error) {
+		entries = append(entries, page.Entries...)
+		more = page.More
+		return false, nil
+	})
+	return entries, more, err
+}
+
+func printMoreLogsWarning(output io.Writer, page int, example string) {
+	_, _ = fmt.Fprintf(output, "dracli: page %d fetched; more log entries are available; add --all (for example: %s)\n", page, example)
 }
 
 func promptForNextLogPage(reader *bufio.Reader, output io.Writer) bool {
@@ -311,8 +397,12 @@ func promptForNextLogPage(reader *bufio.Reader, output io.Writer) bool {
 	return !strings.EqualFold(strings.TrimSpace(answer), "q")
 }
 
-func allLogsExample(commandName, host string, verifyTLS bool, output string) string {
-	parts := []string{"dracli", commandName, "--all"}
+func allLogsExample(selection, host string, verifyTLS bool, output string) string {
+	parts := []string{"dracli", "logs"}
+	if selection != "" {
+		parts = append(parts, selection)
+	}
+	parts = append(parts, "--all")
 	if verifyTLS {
 		parts = append(parts, "--verify-tls")
 	}
@@ -320,6 +410,26 @@ func allLogsExample(commandName, host string, verifyTLS bool, output string) str
 		parts = append(parts, "--output", output)
 	}
 	return strings.Join(append(parts, host), " ")
+}
+
+func runPassword(args []string, stdout io.Writer, getenv func(string) string) error {
+	flags := newFlagSet("password", stdout, "Usage: dracli password [options] <iDRAC IPv4 address>")
+	explicit := flags.String("password", "", "plaintext iDRAC password override")
+	if err := parseBMCCommand(flags, args); err != nil {
+		return ignoreHelp(err)
+	}
+	host := flags.Arg(0)
+	if ip := net.ParseIP(host); ip == nil || ip.To4() == nil {
+		return fmt.Errorf("need an IPv4 address, not %q", host)
+	}
+	password, err := credentials.Resolve(host, *explicit, getenv)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(stdout, password); err != nil {
+		return fmt.Errorf("write password: %w", err)
+	}
+	return nil
 }
 
 func isTerminal(value any) bool {
@@ -796,6 +906,40 @@ func writeInventoryDetails(output io.Writer, inventory redfish.Inventory, format
 			details += " firmware " + controller.Firmware
 		}
 		lines = append(lines, fmt.Sprintf("  %s: %s", known(controller.ID), known(details)))
+		if len(controller.Drives) == 0 {
+			lines = append(lines, "    disks: none reported")
+			continue
+		}
+		lines = append(lines, "    disks:")
+		for _, drive := range controller.Drives {
+			parts := []string{joinKnown(drive.Manufacturer, drive.Model)}
+			if drive.CapacityBytes > 0 {
+				parts = append(parts, formatCapacity(drive.CapacityBytes))
+			}
+			if drive.MediaType != "" {
+				parts = append(parts, drive.MediaType)
+			}
+			if drive.Protocol != "" {
+				parts = append(parts, drive.Protocol)
+			}
+			if drive.RotationSpeedRPM > 0 {
+				parts = append(parts, fmt.Sprintf("%d RPM", drive.RotationSpeedRPM))
+			}
+			if drive.SerialNumber != "" {
+				parts = append(parts, "serial "+drive.SerialNumber)
+			}
+			if drive.Firmware != "" {
+				parts = append(parts, "firmware "+drive.Firmware)
+			}
+			if status := joinKnown(drive.Health, drive.State); status != "unknown" {
+				parts = append(parts, "status "+status)
+			}
+			label := drive.ID
+			if label == "" {
+				label = drive.Name
+			}
+			lines = append(lines, fmt.Sprintf("      %s: %s", known(label), strings.Join(nonempty(parts), "; ")))
+		}
 	}
 	lines = append(lines, "NICs:")
 	if message, failed := inventory.Errors["nics"]; failed {
@@ -1011,8 +1155,22 @@ func formatSpeed(mbps int) string {
 	return fmt.Sprintf("%d Mbps", mbps)
 }
 
+func formatCapacity(bytes int64) string {
+	const (
+		gib = int64(1 << 30)
+		tib = int64(1 << 40)
+	)
+	if bytes >= tib {
+		return fmt.Sprintf("%.2f TiB", float64(bytes)/float64(tib))
+	}
+	return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(gib))
+}
+
 func writeEntries(output io.Writer, entries []json.RawMessage, format string) error {
 	if format == "json" {
+		if entries == nil {
+			entries = []json.RawMessage{}
+		}
 		encoder := json.NewEncoder(output)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(entries); err != nil {
@@ -1024,11 +1182,30 @@ func writeEntries(output io.Writer, entries []json.RawMessage, format string) er
 	for _, raw := range entries {
 		var entry redfish.LogEntry
 		if err := json.Unmarshal(raw, &entry); err != nil {
-			return fmt.Errorf("decode lifecycle log entry: %w", err)
+			return fmt.Errorf("decode log entry: %w", err)
 		}
 		if _, err := fmt.Fprintf(output, "%s %s\n", entry.Created, entry.Message); err != nil {
 			return fmt.Errorf("write text output: %w", err)
 		}
+	}
+	return nil
+}
+
+func writeCombinedLogEntries(output io.Writer, system, lifecycle []json.RawMessage) error {
+	if system == nil {
+		system = []json.RawMessage{}
+	}
+	if lifecycle == nil {
+		lifecycle = []json.RawMessage{}
+	}
+	result := struct {
+		System []json.RawMessage `json:"system"`
+		LC     []json.RawMessage `json:"lc"`
+	}{System: system, LC: lifecycle}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(result); err != nil {
+		return fmt.Errorf("write JSON output: %w", err)
 	}
 	return nil
 }
