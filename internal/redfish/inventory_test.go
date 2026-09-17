@@ -75,7 +75,7 @@ func TestQueryUsesOnlySummaryResourcesAndIncludesSystemStatus(t *testing.T) {
 		requests++
 		switch request.URL.Path {
 		case "/redfish/v1/Systems/System.Embedded.1":
-			return jsonResponse(http.StatusOK, `{"Manufacturer":"Dell","Model":"PowerEdge","SerialNumber":"ABC1234D","PowerState":"On","BootProgress":{"LastState":"OSRunning","LastStateTime":"2026-09-10T07:00:00Z"}}`), nil
+			return jsonResponse(http.StatusOK, `{"Manufacturer":"Dell","Model":"PowerEdge","SKU":"ABC1234","SerialNumber":"CNFCP004410014","PowerState":"On","BootProgress":{"LastState":"OSRunning","LastStateTime":"2026-09-10T07:00:00Z"}}`), nil
 		case "/redfish/v1/Managers/iDRAC.Embedded.1":
 			return jsonResponse(http.StatusOK, `{"Model":"iDRAC9","FirmwareVersion":"7.20","DateTime":"2026-09-10T08:00:00+01:00"}`), nil
 		default:
@@ -94,7 +94,10 @@ func TestQueryUsesOnlySummaryResourcesAndIncludesSystemStatus(t *testing.T) {
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
 	}
-	if result.SerialNumber != "ABC1234D" {
+	if result.ServiceTag != "ABC1234" {
+		t.Fatalf("service tag = %q", result.ServiceTag)
+	}
+	if result.SerialNumber != "CNFCP004410014" {
 		t.Fatalf("serial number = %q", result.SerialNumber)
 	}
 	if result.IDRAC.Model != "iDRAC9" || result.IDRAC.Version != "7.20" {
@@ -175,7 +178,7 @@ func TestQueryKeepsDecodeFailureLocalToAffectedSections(t *testing.T) {
 	if inventory.IDRAC.Version != "7.20" {
 		t.Fatalf("successful manager section was lost: %#v", inventory)
 	}
-	for _, section := range []string{"system", "serial_number", "bios", "memory", "cpu", "status"} {
+	for _, section := range []string{"system", "service_tag", "serial_number", "bios", "memory", "cpu", "status"} {
 		if inventory.Errors[section] != UnableToParseRedfishResponse {
 			t.Errorf("%s error = %q, want parse marker", section, inventory.Errors[section])
 		}

@@ -41,16 +41,16 @@ _dracli()
         prev="${COMP_WORDS[COMP_CWORD-1]}"
     fi
 
-    commands="completion logs lc-logs query inventory status jobs clear-jobs factory-reset settings help"
-    global_options="--verify-tls --insecure --help -help -h"
-    common_options="--username --password --insecure --verify-tls --output --timeout --help -help -h"
+    commands="completion logs sel-logs query inventory status jobs clear-jobs factory-reset settings help"
+    global_options="--verify-tls --help -help -h"
+    common_options="--username --password --verify-tls --output --timeout --help -help -h"
 
     command=""
     command_index=0
     for (( index=1; index<COMP_CWORD; index++ )); do
         word="${COMP_WORDS[index]}"
         case "$word" in
-            completion|logs|lc-logs|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
+            completion|logs|sel-logs|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
                 command="$word"
                 command_index=$index
                 break
@@ -109,7 +109,7 @@ _dracli()
     fi
 
     case "$command" in
-        logs|lc-logs)
+        logs|sel-logs)
             options="$common_options --manager --all"
             ;;
         query|inventory)
@@ -154,7 +154,7 @@ _dracli()
     commands=(
         'completion:Generate a shell completion script'
         'logs:Fetch Lifecycle Controller log entries'
-        'lc-logs:Alias for logs'
+        'sel-logs:Fetch System Event Log entries'
         'query:Show a quick system summary'
         'inventory:Show system RAID and NIC inventory'
         'status:Show power state and boot progress'
@@ -166,7 +166,6 @@ _dracli()
     )
     global_options=(
         '--verify-tls:Validate the BMC TLS certificate and hostname'
-        '--insecure:Explicitly skip TLS certificate verification'
         '--help:Show the command guide'
         '-help:Show the command guide'
         '-h:Show the command guide'
@@ -174,7 +173,6 @@ _dracli()
     common_options=(
         '--username:BMC username'
         '--password:BMC password'
-        '--insecure:Explicitly skip TLS certificate verification'
         '--verify-tls:Validate the BMC TLS certificate and hostname'
         '--output:Output format (text or json)'
         '--timeout:HTTP request timeout'
@@ -188,7 +186,7 @@ _dracli()
     for (( index=2; index<CURRENT; index++ )); do
         word="${words[index]}"
         case "$word" in
-            completion|logs|lc-logs|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
+            completion|logs|sel-logs|query|inventory|status|jobs|clear-jobs|factory-reset|settings|help)
                 command="$word"
                 command_index=$index
                 break
@@ -244,7 +242,7 @@ _dracli()
     fi
 
     case "$command" in
-        logs|lc-logs)
+        logs|sel-logs)
             options=(
                 "${common_options[@]}"
                 '--manager:Redfish manager identifier'

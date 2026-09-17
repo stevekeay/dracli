@@ -71,6 +71,34 @@ func TestMissingMasterIsReported(t *testing.T) {
 	}
 }
 
+func TestSystemEventLogsCommandIsRecognized(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := Run([]string{"sel-logs", "10.46.96.160"}, &stdout, &stderr, func(string) string { return "" })
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "BMC_MASTER must be set") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestLogCommandHelp(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"logs", "sel-logs"} {
+		var stdout, stderr bytes.Buffer
+		exitCode := Run([]string{command, "--help"}, &stdout, &stderr, func(string) string { return "" })
+		if exitCode != 0 {
+			t.Errorf("%s: exit code = %d, stderr = %q", command, exitCode, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "Usage: dracli "+command) {
+			t.Errorf("%s: stdout = %q", command, stdout.String())
+		}
+	}
+}
+
 func TestHelp(t *testing.T) {
 	t.Parallel()
 
@@ -80,6 +108,7 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Global options:") ||
 		!strings.Contains(stdout.String(), "settings bios") ||
+		!strings.Contains(stdout.String(), "sel-logs") ||
 		!strings.Contains(stdout.String(), "Password precedence") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
@@ -112,7 +141,7 @@ func TestCompletionScripts(t *testing.T) {
 			shell: "bash",
 			want: []string{
 				"complete -F _dracli dracli",
-				"completion logs lc-logs query inventory status jobs clear-jobs factory-reset settings help",
+				"completion logs sel-logs query inventory status jobs clear-jobs factory-reset settings help",
 				"--manager --system --all --name --set",
 				"drac bios",
 				"text json",
@@ -145,6 +174,9 @@ func TestCompletionScripts(t *testing.T) {
 				if !strings.Contains(stdout.String(), want) {
 					t.Errorf("completion output does not contain %q", want)
 				}
+			}
+			if strings.Contains(stdout.String(), "--insecure") {
+				t.Error("completion output advertises removed --insecure option")
 			}
 		})
 	}
@@ -181,7 +213,7 @@ func TestCompletionHelp(t *testing.T) {
 	}
 }
 
-func TestInsecureMayPrecedeCommand(t *testing.T) {
+func TestVerifyTLSMayPrecedeCommand(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -189,9 +221,8 @@ func TestInsecureMayPrecedeCommand(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{name: "simple command", args: []string{"--insecure", "status", "10.46.96.160"}, want: []string{"status", "--insecure", "10.46.96.160"}},
-		{name: "settings subcommand", args: []string{"--insecure", "settings", "bios", "10.46.96.160"}, want: []string{"settings", "bios", "--insecure", "10.46.96.160"}},
-		{name: "TLS verification", args: []string{"--verify-tls", "query", "10.46.96.160"}, want: []string{"query", "--verify-tls", "10.46.96.160"}},
+		{name: "simple command", args: []string{"--verify-tls", "status", "10.46.96.160"}, want: []string{"status", "--verify-tls", "10.46.96.160"}},
+		{name: "settings subcommand", args: []string{"--verify-tls", "settings", "bios", "10.46.96.160"}, want: []string{"settings", "bios", "--verify-tls", "10.46.96.160"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -205,11 +236,6 @@ func TestInsecureMayPrecedeCommand(t *testing.T) {
 		})
 	}
 
-	var stderr bytes.Buffer
-	exitCode := Run([]string{"--insecure", "status", "10.46.96.160"}, io.Discard, &stderr, func(string) string { return "" })
-	if exitCode != 1 || !strings.Contains(stderr.String(), "BMC_MASTER must be set") {
-		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
-	}
 }
 
 func TestIPv4AddressWithoutCommandDefaultsToQuery(t *testing.T) {
@@ -254,6 +280,16 @@ func TestPromptForNextLogPage(t *testing.T) {
 	}
 }
 
+func TestAllLogsExampleUsesSelectedCommand(t *testing.T) {
+	t.Parallel()
+
+	got := allLogsExample("sel-logs", "10.46.96.160", true, "json")
+	want := "dracli sel-logs --all --verify-tls --output json 10.46.96.160"
+	if got != want {
+		t.Fatalf("allLogsExample() = %q, want %q", got, want)
+	}
+}
+
 func TestWriteInventoryReportsPartialFailureAndClockWarning(t *testing.T) {
 	t.Parallel()
 
@@ -278,7 +314,8 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 
 	inventory := redfish.Inventory{
 		System:       redfish.SystemSummary{Manufacturer: "Dell", Model: "PowerEdge"},
-		SerialNumber: "ABC1234D",
+		ServiceTag:   "ABC1234",
+		SerialNumber: "CNFCP004410014",
 		IDRAC:        redfish.FirmwareSummary{Model: "iDRAC9", Version: "7.20"},
 		Status: redfish.SystemStatus{
 			PowerState: "On",
@@ -292,11 +329,14 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 	if err := writeQuery(&output, inventory, "text"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Serial Number: ABC1234D") ||
+	if !strings.Contains(output.String(), "Service Tag: ABC1234") ||
 		!strings.Contains(output.String(), "iDRAC: iDRAC9 7.20") ||
 		!strings.Contains(output.String(), "Power state: On") ||
 		!strings.Contains(output.String(), "Boot progress: OSRunning at 2026-09-10T07:00:00Z") {
 		t.Fatalf("output = %q", output.String())
+	}
+	if strings.Contains(output.String(), "CNFCP004410014") {
+		t.Fatalf("text output included the hardware serial number: %q", output.String())
 	}
 	if strings.Contains(output.String(), "RAID controllers:") || strings.Contains(output.String(), "NICs:") {
 		t.Fatalf("query included slow inventory sections: %q", output.String())
@@ -306,7 +346,9 @@ func TestWriteQueryIncludesStatusWithoutDetailedInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(jsonOutput.String(), `"hardware_version": "iDRAC9"`) ||
-		!strings.Contains(jsonOutput.String(), `"firmware_version": "7.20"`) {
+		!strings.Contains(jsonOutput.String(), `"firmware_version": "7.20"`) ||
+		!strings.Contains(jsonOutput.String(), `"service_tag": "ABC1234"`) ||
+		!strings.Contains(jsonOutput.String(), `"serial_number": "CNFCP004410014"`) {
 		t.Fatalf("JSON output = %q", jsonOutput.String())
 	}
 }
@@ -315,18 +357,18 @@ func TestQuerySystemSummaryOrder(t *testing.T) {
 	t.Parallel()
 
 	inventory := redfish.Inventory{
-		System:       redfish.SystemSummary{Manufacturer: "Dell Inc.", Model: "PowerEdge XE8640"},
-		SerialNumber: "ABC1234D",
-		Memory:       redfish.MemorySummary{TotalGiB: 2048},
-		CPU:          redfish.ProcessorSummary{Count: 2, Model: "Intel Xeon", Cores: 96, Threads: 192},
-		BIOSVersion:  "2.8.2",
-		IDRAC:        redfish.FirmwareSummary{Model: "16G Monolithic", Version: "7.30.10.50"},
+		System:      redfish.SystemSummary{Manufacturer: "Dell Inc.", Model: "PowerEdge XE8640"},
+		ServiceTag:  "ABC1234",
+		Memory:      redfish.MemorySummary{TotalGiB: 2048},
+		CPU:         redfish.ProcessorSummary{Count: 2, Model: "Intel Xeon", Cores: 96, Threads: 192},
+		BIOSVersion: "2.8.2",
+		IDRAC:       redfish.FirmwareSummary{Model: "16G Monolithic", Version: "7.30.10.50"},
 	}
 	var output bytes.Buffer
 	if err := writeQuery(&output, inventory, "text"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"System:", "Serial Number:", "Memory:", "CPU:", "BIOS:", "iDRAC:"}
+	want := []string{"System:", "Service Tag:", "Memory:", "CPU:", "BIOS:", "iDRAC:"}
 	previous := -1
 	for _, label := range want {
 		index := strings.Index(output.String(), label)
@@ -340,10 +382,10 @@ func TestQuerySystemSummaryOrder(t *testing.T) {
 func TestTLSVerificationOverridesInsecureDefault(t *testing.T) {
 	t.Parallel()
 
-	if !skipTLSVerification(false, false) {
+	if !shouldSkipTLSVerification(false) {
 		t.Fatal("default should skip TLS verification")
 	}
-	if skipTLSVerification(true, true) {
+	if shouldSkipTLSVerification(true) {
 		t.Fatal("--verify-tls should enable verification")
 	}
 }

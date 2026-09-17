@@ -18,6 +18,8 @@ func TestProgressDescription(t *testing.T) {
 		{args: []string{"--verify-tls", "inventory", "10.46.96.160"}, want: "Collecting hardware inventory..."},
 		{args: []string{"settings", "bios", "--set", "SecureBoot=Disabled", "10.46.96.160"}, want: "Updating iDRAC settings..."},
 		{args: []string{"status", "--monitor", "10.46.96.160"}, want: "Querying system status..."},
+		{args: []string{"logs", "10.46.96.160"}, want: "Fetching Lifecycle Controller logs..."},
+		{args: []string{"sel-logs", "10.46.96.160"}, want: "Fetching System Event Log..."},
 		{args: []string{"query", "--help"}, want: ""},
 		{args: []string{"unknown", "10.46.96.160"}, want: ""},
 	}

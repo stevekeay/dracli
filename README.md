@@ -12,8 +12,6 @@ the certificate and hostname:
 ./dracli status --verify-tls x.x.x.x
 ```
 
-`--insecure` remains accepted as an explicit spelling of the default.
-
 When standard output is a terminal, commands show a short activity spinner
 while waiting for iDRAC. The spinner line is cleared as soon as command output
 or an error is available. Redirected and piped output contains no spinner.
@@ -44,7 +42,7 @@ The scripts complete commands, the `settings drac|bios` namespace, all command
 options, and known values such as `--output text|json`. To install the generated
 script permanently instead, redirect it to a file sourced by your shell.
 
-## Lifecycle Controller logs
+## Lifecycle Controller and System Event logs
 
 By default, `dracli` derives the BMC password from `BMC_MASTER` using the same
 PBKDF2 scheme as `understack_workflows.bmc_password_standard`:
@@ -67,12 +65,14 @@ For example:
 DRAC_PASSWORD='plain-text-password' ./dracli logs x.x.x.x
 ./dracli logs --output json x.x.x.x
 ./dracli logs --all x.x.x.x
+./dracli sel-logs --all x.x.x.x
 ```
 
-`logs` fetches one page by default. At a terminal it offers to fetch the next
-page; when output is redirected it stops after page one and prints an example
-showing how to add `--all`. JSON output also requires `--all` for multi-page
-results so the command emits one valid JSON array.
+`logs` reads the Lifecycle Controller log; `sel-logs` reads the System Event
+Log (SEL). Both commands fetch one page by default. At a terminal they offer to
+fetch the next page; when output is redirected they stop after page one and
+print an example showing how to add `--all`. JSON output also requires `--all`
+for multi-page results so the command emits one valid JSON array.
 
 The default username is `root`; override it with `--username` or
 `DRAC_USERNAME`. TLS certificates are only verified when `--verify-tls` is supplied.

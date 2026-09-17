@@ -91,8 +91,16 @@ func NewClient(baseURL, username, password string, httpClient *http.Client) (*Cl
 }
 
 func (c *Client) LifecycleLogs(ctx context.Context, managerID string) ([]json.RawMessage, error) {
+	return c.logs(ctx, managerID, "Lclog")
+}
+
+func (c *Client) SystemEventLogs(ctx context.Context, managerID string) ([]json.RawMessage, error) {
+	return c.logs(ctx, managerID, "Sel")
+}
+
+func (c *Client) logs(ctx context.Context, managerID, service string) ([]json.RawMessage, error) {
 	var entries []json.RawMessage
-	err := c.LifecycleLogPages(ctx, managerID, func(page LogPage) (bool, error) {
+	err := c.logPages(ctx, managerID, service, func(page LogPage) (bool, error) {
 		entries = append(entries, page.Entries...)
 		return true, nil
 	})
@@ -103,7 +111,18 @@ func (c *Client) LifecycleLogs(ctx context.Context, managerID string) ([]json.Ra
 // no more pages or visit returns false. Pagination URLs remain constrained to
 // the iDRAC origin.
 func (c *Client) LifecycleLogPages(ctx context.Context, managerID string, visit func(LogPage) (bool, error)) error {
-	path := "/redfish/v1/Managers/" + url.PathEscape(managerID) + "/LogServices/Lclog/Entries"
+	return c.logPages(ctx, managerID, "Lclog", visit)
+}
+
+// SystemEventLogPages visits each System Event Log page until there are no
+// more pages or visit returns false. Pagination URLs remain constrained to the
+// iDRAC origin.
+func (c *Client) SystemEventLogPages(ctx context.Context, managerID string, visit func(LogPage) (bool, error)) error {
+	return c.logPages(ctx, managerID, "Sel", visit)
+}
+
+func (c *Client) logPages(ctx context.Context, managerID, service string, visit func(LogPage) (bool, error)) error {
+	path := "/redfish/v1/Managers/" + url.PathEscape(managerID) + "/LogServices/" + service + "/Entries"
 	pageURL := c.baseURL.ResolveReference(&url.URL{Path: path})
 	seen := make(map[string]struct{})
 

@@ -65,6 +65,31 @@ func TestLifecycleLogsFollowsPagination(t *testing.T) {
 	}
 }
 
+func TestSystemEventLogsUseSELService(t *testing.T) {
+	t.Parallel()
+
+	var requestedPath string
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestedPath = request.URL.Path
+		return jsonResponse(http.StatusOK, `{"Members":[{"Created":"now","Message":"Fan failure"}]}`), nil
+	})}
+	client, err := NewClient("https://bmc.example", "root", "secret", httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := client.SystemEventLogs(context.Background(), "iDRAC.Embedded.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestedPath != "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Sel/Entries" {
+		t.Fatalf("request path = %q", requestedPath)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+}
+
 func TestLifecycleLogsRejectsCrossOriginPagination(t *testing.T) {
 	t.Parallel()
 
